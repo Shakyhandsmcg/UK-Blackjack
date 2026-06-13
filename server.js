@@ -114,7 +114,7 @@ io.on('connection', (socket) => {
         rooms[roomCode] = {
             code: roomCode,
             maxPlayers: parseInt(maxPlayers),
-            players: [{ id: socket.id, name: hostName, hand: [], saidCard: false, out: false, rank: null, color: '#ffeb3b', isHost: true, isAI: false }],
+            players: [{ id: socket.id, name: hostName, hand: [], saidCard: false, out: false, rank: null, color: '#ffeb3b', isHost: true, isAI: false, finishedOnPickup: false }],
             deck: [],
             playedStack: [],
             activePickupCount: 0,
@@ -139,7 +139,7 @@ io.on('connection', (socket) => {
         const colors = ["#ffeb3b", "#00e5ff", "#ff4081", "#ff9100"];
         const playerColor = colors[room.players.length] || "#ffffff";
 
-        room.players.push({ id: socket.id, name, hand: [], saidCard: false, out: false, rank: null, color: playerColor, isHost: false, isAI: false });
+        room.players.push({ id: socket.id, name, hand: [], saidCard: false, out: false, rank: null, color: playerColor, isHost: false, isAI: false, finishedOnPickup: false });
         socket.join(code);
         io.to(code).emit('roomUpdated', room);
         socket.emit('joinSuccess', { room, myId: socket.id });
@@ -156,7 +156,7 @@ io.on('connection', (socket) => {
         room.players.push({
             id: `bot-${Math.random().toString(36).substr(2, 5)}`,
             name: `CPU Bot ${botIndex}`,
-            hand: [], saidCard: false, out: false, rank: null, color: botColor, isHost: false, isAI: true
+            hand: [], saidCard: false, out: false, rank: null, color: botColor, isHost: false, isAI: true, finishedOnPickup: false
         });
         io.to(roomCode).emit('roomUpdated', room);
     });
@@ -170,7 +170,7 @@ io.on('connection', (socket) => {
         shuffle(room.deck);
 
         room.players.forEach(p => {
-            p.hand = [];
+            p.hand = []; p.saidCard = false; p.out = false; p.rank = null; p.finishedOnPickup = false;
             for(let i=0; i<7; i++) p.hand.push(room.deck.pop());
         });
 
@@ -263,8 +263,20 @@ function executeChainActions(room, chain, player) {
     });
 
     if (player.hand.length === 0) {
-        if (!player.saidCard) drawCards(room, player, 2);
-        else { player.out = true; room.finishPodiumOrder.push(player.id); player.rank = room.finishPodiumOrder.length; }
+        if (!player.saidCard) {
+            drawCards(room, player, 2);
+        } else {
+            player.out = true;
+            room.finishPodiumOrder.push(player.id);
+            player.rank = room.finishPodiumOrder.length;
+            
+            // TOOURNAMENT RULE TRACKING: Mark if they went out on an active attacking penalty card
+            if (lastPlayed && (lastPlayed.displayValue === '2' || (lastPlayed.displayValue === 'J' && ['♠','♣'].includes(lastPlayed.displaySuit)))) {
+                player.finishedOnPickup = true;
+            } else {
+                player.finishedOnPickup = false;
+            }
+        }
     }
 
     if (lastPlayed.displayValue === 'A' && !player.isAI) {
@@ -283,7 +295,15 @@ function executeChainActions(room, chain, player) {
 function executeDrawAction(room, player) {
     let count = room.activePickupCount > 0 ? room.activePickupCount : 1;
     drawCards(room, player, count);
-    room.activePickupCount = 0; player.saidCard = false;
+    
+    // TOOURNAMENT RULE SAFETY VALVE: Since this player absorbed/paid the penalty,
+    // clear all "Bring Back" flags across the room. The threat is dead!
+    if (room.activePickupCount > 0) {
+        room.players.forEach(p => p.finishedOnPickup = false);
+    }
+
+    room.activePickupCount = 0; 
+    player.saidCard = false;
     completeTurnPassing(room);
 }
 
@@ -303,8 +323,10 @@ function advanceTurn(room) {
     room.currentPlayerIdx = (room.currentPlayerIdx + room.turnDirection + room.players.length) % room.players.length;
 }
 
+// --- RE-ENGINEERED TOURNAMENT TURN BRING-BACK CORE ---
 function completeTurnPassing(room) {
     let activeCount = room.players.filter(pl => !pl.out).length;
+    
     if (activeCount <= 1) {
         let lastPlayer = room.players.find(pl => !pl.out);
         if (lastPlayer) { room.finishPodiumOrder.push(lastPlayer.id); lastPlayer.rank = room.finishPodiumOrder.length; lastPlayer.out = true; }
@@ -320,12 +342,26 @@ function completeTurnPassing(room) {
     let loops = 0;
     while (loops < room.players.length) {
         let target = room.players[room.currentPlayerIdx];
-        if (target.out && room.activePickupCount > 0) {
-            target.out = false; target.rank = null;
-            room.finishPodiumOrder = room.finishPodiumOrder.filter(id => id !== target.id);
-            room.players.forEach(pl => { if(pl.out && pl.rank !== null) pl.rank = room.finishPodiumOrder.indexOf(pl.id) + 1; });
-            drawCards(room, target, room.activePickupCount); room.activePickupCount = 0; target.saidCard = false; break;
+        
+        // Dynamic Bring Back Validator Block
+        if (target.out) {
+            // CRITICAL CHECK: Only pull an 'out' player back if they finished on an attack card AND the penalty survived the loop back to them
+            if (room.activePickupCount > 0 && target.finishedOnPickup === true) {
+                target.out = false; 
+                target.rank = null;
+                target.finishedOnPickup = false; // Reset the flag once triggered
+                
+                // Re-align leaderboard tracking indices
+                room.finishPodiumOrder = room.finishPodiumOrder.filter(id => id !== target.id);
+                room.players.forEach(pl => { if(pl.out && pl.rank !== null) pl.rank = room.finishPodiumOrder.indexOf(pl.id) + 1; });
+                
+                drawCards(room, target, room.activePickupCount); 
+                room.activePickupCount = 0; 
+                target.saidCard = false; 
+                break;
+            }
         }
+
         if (!target.out) break;
         advanceTurn(room); loops++;
     }
