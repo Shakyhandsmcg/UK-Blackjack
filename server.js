@@ -5,7 +5,14 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+// PRODUCTION FIX: Explicitly configure CORS permissions for cloud-hosted environments
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -357,7 +364,6 @@ function checkAndExecuteBotTurn(room) {
             if (defenseIdx > -1) {
                 let card = currentMover.hand[defenseIdx];
                 if (currentMover.hand.length === 2) currentMover.saidCard = true;
-                // CRITICAL FIX: Swap p.hand out for the scoped currentMover instance array
                 currentMover.hand.splice(defenseIdx, 1);
                 executeChainActions(room, [card], currentMover);
             } else {
@@ -382,3 +388,6 @@ function checkAndExecuteBotTurn(room) {
         }
     }, 3000); 
 }
+
+// PRODUCTION FIX: Bind strictly to '0.0.0.0' so Render can catch incoming websocket handshakes globally
+server.listen(PORT, '0.0.0.0', () => console.log(`Master Router active on port :${PORT}`));
