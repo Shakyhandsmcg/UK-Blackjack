@@ -59,20 +59,12 @@ function permute(arr) {
 }
 
 function isValidStep(card, activeVal, activeSuit, suitOverride, isFirstCard) {
-    if (isFirstCard && card.displayValue === 'A') {
-        return true;
-    }
-    if (card.displayValue === activeVal) {
-        return true;
-    }
+    if (isFirstCard && card.displayValue === 'A') return true;
+    if (card.displayValue === activeVal) return true;
     let targetSuit = (suitOverride !== null) ? suitOverride : activeSuit;
-    if (card.displaySuit === targetSuit) {
-        return true;
-    }
+    if (card.displaySuit === targetSuit) return true;
     if (card.displayValue === 'Q' || activeVal === 'Q') {
-        if (isFirstCard) {
-            return (card.displaySuit === targetSuit || card.displayValue === activeVal);
-        }
+        if (isFirstCard) return (card.displaySuit === targetSuit || card.displayValue === activeVal);
         return true;
     }
     return false;
@@ -93,7 +85,6 @@ function getValidPermutation(cards, room) {
     }
 
     let allOrders = permute(cards);
-
     for (let order of allOrders) {
         let activeSuit = initialSuit;
         let activeVal = initialVal;
@@ -103,12 +94,9 @@ function getValidPermutation(cards, room) {
         for (let i = 0; i < order.length; i++) {
             let card = order[i];
             if (isValidStep(card, activeVal, activeSuit, suitOverride, i === 0)) {
-                activeVal = card.displayValue;
-                activeSuit = card.displaySuit;
-                suitOverride = null;
+                activeVal = card.displayValue; activeSuit = card.displaySuit; suitOverride = null;
             } else {
-                sequenceIsValid = false;
-                break;
+                sequenceIsValid = false; break;
             }
         }
         if (sequenceIsValid) return order;
@@ -123,7 +111,7 @@ io.on('connection', (socket) => {
         rooms[roomCode] = {
             code: roomCode,
             maxPlayers: parseInt(maxPlayers),
-            players: [{ id: socket.id, name: hostName, hand: [], saidCard: false, out: false, rank: null, color: '#ffeb3b', isHost: true }],
+            players: [{ id: socket.id, name: hostName, hand: [], saidCard: false, out: false, rank: null, color: '#ffeb3b', isHost: true, isAI: false }],
             deck: [],
             playedStack: [],
             activePickupCount: 0,
@@ -148,10 +136,29 @@ io.on('connection', (socket) => {
         const colors = ["#ffeb3b", "#00e5ff", "#ff4081", "#ff9100"];
         const playerColor = colors[room.players.length] || "#ffffff";
 
-        room.players.push({ id: socket.id, name, hand: [], saidCard: false, out: false, rank: null, color: playerColor, isHost: false });
+        room.players.push({ id: socket.id, name, hand: [], saidCard: false, out: false, rank: null, color: playerColor, isHost: false, isAI: false });
         socket.join(code);
         io.to(code).emit('roomUpdated', room);
         socket.emit('joinSuccess', { room, myId: socket.id });
+    });
+
+    // SERVER BOT SPINNER INJECTION
+    socket.on('addBotServer', ({ roomCode }) => {
+        const room = rooms[roomCode];
+        if (!room || room.players.length >= room.maxPlayers) return;
+
+        const colors = ["#ffeb3b", "#00e5ff", "#ff4081", "#ff9100"];
+        const botColor = colors[room.players.length] || "#ffffff";
+        const botIndex = room.players.filter(p => p.isAI).length + 1;
+
+        room.players.push({
+            id: `bot-${Math.random().toString(36).substr(2, 5)}`,
+            name: `CPU Bot ${botIndex}`,
+            hand: [], saidCard: false, out: false, rank: null,
+            color: botColor, isHost: false, isAI: true
+        });
+
+        io.to(roomCode).emit('roomUpdated', room);
     });
 
     socket.on('startGameServer', ({ roomCode }) => {
@@ -169,15 +176,13 @@ io.on('connection', (socket) => {
 
         let startCard = room.deck.pop();
         while(startCard.isJoker || ['A','2','8','J','Q','K'].includes(startCard.value)) {
-            room.deck.unshift(startCard);
-            shuffle(room.deck);
-            startCard = room.deck.pop();
+            room.deck.unshift(startCard); shuffle(room.deck); startCard = room.deck.pop();
         }
-        startCard.playedBy = "Dealer";
-        startCard.playerColor = "#aaaaaa";
+        startCard.playedBy = "Dealer"; startCard.playerColor = "#aaaaaa";
         room.playedStack.push(startCard);
 
         io.to(roomCode).emit('gameStartedSignal', room);
+        checkAndExecuteBotTurn(room);
     });
 
     socket.on('playCards', ({ roomCode, cardIndices, jokerConfigurations }) => {
@@ -197,50 +202,12 @@ io.on('connection', (socket) => {
 
         let cardsToPlay = cardIndices.map(idx => p.hand[idx]);
         let workingOrderChain = getValidPermutation(cardsToPlay, room);
-        
-        if (!workingOrderChain) {
-            return socket.emit('errorMsg', 'Broken card sequence connection. Those cards cannot legally chain together!');
-        }
+        if (!workingOrderChain) return socket.emit('errorMsg', 'Broken sequence link.');
         
         p.hand = p.hand.filter((_, idx) => !cardIndices.includes(idx));
         room.activeSuitOverride = null;
 
-        let lastPlayed = null;
-        workingOrderChain.forEach(card => {
-            lastPlayed = card;
-            lastPlayed.playedBy = p.name;
-            lastPlayed.playerColor = p.color;
-            room.playedStack.push(lastPlayed);
-
-            let val = card.displayValue; let suit = card.displaySuit;
-            if (val === '2') room.activePickupCount += 2;
-            else if (val === 'J' && (suit === '♠' || suit === '♣')) room.activePickupCount += 4;
-            else if (val === 'J' && (suit === '♥' || suit === '♦')) room.activePickupCount = 0;
-            else if (val === '8') advanceTurn(room);
-            else if (val === 'K') {
-                // CRITICAL FIXED KING RULE: Check live active room size parameters
-                // If there are only 2 people in the match, the King bypasses turn progression entirely!
-                if (room.players.length > 2) {
-                    room.turnDirection *= -1;
-                }
-            }
-        });
-
-        if (p.hand.length === 0) {
-            if (!p.saidCard) {
-                drawCards(room, p, 2);
-            } else {
-                p.out = true;
-                room.finishPodiumOrder.push(p.id);
-                p.rank = room.finishPodiumOrder.length;
-            }
-        }
-
-        if (lastPlayed.displayValue === 'A') {
-            io.to(roomCode).emit('promptAceSelectionNetwork', { room, playerId: p.id });
-        } else {
-            completeTurnPassing(room);
-        }
+        executeChainActions(room, workingOrderChain, p);
     });
 
     socket.on('submitAceOverride', ({ roomCode, suit }) => {
@@ -253,56 +220,81 @@ io.on('connection', (socket) => {
     socket.on('drawOrPass', ({ roomCode }) => {
         const room = rooms[roomCode];
         if (!room) return;
-        const p = room.players.find(pl => pl.id === socket.id);
-        if (!p || room.players[room.currentPlayerIdx].id !== socket.id) return;
-
-        let count = room.activePickupCount > 0 ? room.activePickupCount : 1;
-        drawCards(room, p, count);
-        room.activePickupCount = 0;
-        p.saidCard = false;
-        
-        completeTurnPassing(room);
+        if (room.players[room.currentPlayerIdx].id !== socket.id) return;
+        executeDrawAction(room, room.players[room.currentPlayerIdx]);
     });
 
     socket.on('sayCardDeclaration', ({ roomCode }) => {
         const room = rooms[roomCode];
         if (!room) return;
         const p = room.players.find(pl => pl.id === socket.id);
-        if (p) {
-            p.saidCard = true;
-            io.to(roomCode).emit('gameStateSynced', room);
-        }
+        if (p) { p.saidCard = true; io.to(roomCode).emit('gameStateSynced', room); }
     });
 
     socket.on('rearrangeHand', ({ roomCode, newHand }) => {
         const room = rooms[roomCode];
         if (!room) return;
         const p = room.players.find(pl => pl.id === socket.id);
-        if (p) {
-            p.hand = newHand;
-            io.to(roomCode).emit('gameStateSynced', room);
-        }
+        if (p) { p.hand = newHand; io.to(roomCode).emit('gameStateSynced', room); }
     });
 
     socket.on('disconnect', () => {
         for (let code in rooms) {
             const room = rooms[code];
             room.players = room.players.filter(p => p.id !== socket.id);
-            if (room.players.length === 0) delete rooms[code];
+            if (room.players.length === 0 || room.players.every(p => p.isAI)) delete rooms[code];
             else io.to(code).emit('gameStateSynced', room);
         }
     });
 });
 
+function executeChainActions(room, chain, player) {
+    let lastPlayed = null;
+    chain.forEach(card => {
+        lastPlayed = card; lastPlayed.playedBy = player.name; lastPlayed.playerColor = player.color;
+        room.playedStack.push(lastPlayed);
+
+        let val = card.displayValue; let suit = card.displaySuit;
+        if (val === '2') room.activePickupCount += 2;
+        else if (val === 'J' && (suit === '♠' || suit === '♣')) room.activePickupCount += 4;
+        else if (val === 'J' && (suit === '♥' || suit === '♦')) room.activePickupCount = 0;
+        else if (val === '8') advanceTurn(room);
+        else if (val === 'K' && room.players.length > 2) room.turnDirection *= -1;
+    });
+
+    if (player.hand.length === 0) {
+        if (!player.saidCard) drawCards(room, player, 2);
+        else { player.out = true; room.finishPodiumOrder.push(player.id); player.rank = room.finishPodiumOrder.length; }
+    }
+
+    if (lastPlayed.displayValue === 'A' && !player.isAI) {
+        io.to(room.code).emit('promptAceSelectionNetwork', { room, playerId: player.id });
+    } else if (lastPlayed.displayValue === 'A' && player.isAI) {
+        // AI Ace suit picker context selector
+        let counts = { '♠':0, '♥':0, '♦':0, '♣':0 };
+        player.hand.forEach(c => { if(counts[c.displaySuit] !== undefined) counts[c.displaySuit]++; });
+        let best = '♠'; for(let s in counts) { if(counts[s] > counts[best]) best = s; }
+        room.activeSuitOverride = best;
+        completeTurnPassing(room);
+    } else {
+        completeTurnPassing(room);
+    }
+}
+
+function executeDrawAction(room, player) {
+    let count = room.activePickupCount > 0 ? room.activePickupCount : 1;
+    drawCards(room, player, count);
+    room.activePickupCount = 0; player.saidCard = false;
+    completeTurnPassing(room);
+}
+
 function drawCards(room, player, count) {
     for (let i = 0; i < count; i++) {
         if (room.deck.length === 0) {
             if (room.playedStack.length <= 1) break;
-            let top = room.playedStack.pop();
-            room.deck = [...room.playedStack];
+            let top = room.playedStack.pop(); room.deck = [...room.playedStack];
             room.deck.forEach(c => { if(c.isJoker) { c.displayValue = '🃏'; c.displaySuit = '🃏'; } });
-            shuffle(room.deck);
-            room.playedStack = [top];
+            shuffle(room.deck); room.playedStack = [top];
         }
         player.hand.push(room.deck.pop());
     }
@@ -316,28 +308,13 @@ function completeTurnPassing(room) {
     let activeCount = room.players.filter(pl => !pl.out).length;
     if (activeCount <= 1) {
         let lastPlayer = room.players.find(pl => !pl.out);
-        if (lastPlayer) {
-            room.finishPodiumOrder.push(lastPlayer.id);
-            lastPlayer.rank = room.finishPodiumOrder.length;
-            lastPlayer.out = true;
-        }
-        room.isGameOver = true;
-        io.to(room.code).emit('gameStateSynced', room);
-        return;
+        if (lastPlayer) { room.finishPodiumOrder.push(lastPlayer.id); lastPlayer.rank = room.finishPodiumOrder.length; lastPlayer.out = true; }
+        room.isGameOver = true; io.to(room.code).emit('gameStateSynced', room); return;
     }
 
-    // Capture the top card played during this action window sequence
     let currentTop = room.playedStack[room.playedStack.length - 1];
-    
-    // CRITICAL 2-PLAYER TURN GUARD: If a King was played AND there are only 2 players left active in the game, 
-    // bypass turn progression to immediately bounce the turn window directly back to the current user!
     if (currentTop && currentTop.displayValue === 'K' && activeCount === 2) {
-        // Double check to verify the current player didn't just win/go out on that King placement
-        let currentActiveMover = room.players[room.currentPlayerIdx];
-        if (currentActiveMover && !currentActiveMover.out) {
-            io.to(room.code).emit('gameStateSynced', room);
-            return; 
-        }
+        if (!room.players[room.currentPlayerIdx].out) { io.to(room.code).emit('gameStateSynced', room); checkAndExecuteBotTurn(room); return; }
     }
 
     advanceTurn(room);
@@ -345,20 +322,62 @@ function completeTurnPassing(room) {
     while (loops < room.players.length) {
         let target = room.players[room.currentPlayerIdx];
         if (target.out && room.activePickupCount > 0) {
-            target.out = false;
-            target.rank = null;
+            target.out = false; target.rank = null;
             room.finishPodiumOrder = room.finishPodiumOrder.filter(id => id !== target.id);
             room.players.forEach(pl => { if(pl.out && pl.rank !== null) pl.rank = room.finishPodiumOrder.indexOf(pl.id) + 1; });
-            drawCards(room, target, room.activePickupCount);
-            room.activePickupCount = 0;
-            target.saidCard = false;
-            break;
+            drawCards(room, target, room.activePickupCount); room.activePickupCount = 0; target.saidCard = false; break;
         }
         if (!target.out) break;
-        advanceTurn(room);
-        loops++;
+        advanceTurn(room); loops++;
     }
     io.to(room.code).emit('gameStateSynced', room);
+    checkAndExecuteBotTurn(room);
 }
 
-server.listen(PORT, () => console.log(`Master Router active on port :${PORT}`));
+// --- CORE CLOUD BOT ROUTING EXECUTION ENGINE ---
+function checkAndExecuteBotTurn(room) {
+    if (room.isGameOver) return;
+    let currentMover = room.players[room.currentPlayerIdx];
+    if (!currentMover || !currentMover.isAI || currentMover.out) return;
+
+    setTimeout(() => {
+        let currentTop = room.playedStack[room.playedStack.length - 1];
+        let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
+        let activeVal = currentTop.displayValue;
+
+        // Auto-configure Jokers for the bot if helpful
+        currentMover.hand.forEach(c => {
+            if (c.isJoker) { c.displaySuit = activeSuit; c.displayValue = activeVal === 'Joker' ? '7' : activeVal; }
+        });
+
+        // AI Rule: Check for penalty stack defense
+        if (room.activePickupCount > 0) {
+            let defenseIdx = currentMover.hand.findIndex(c => isPickupCard(c) || (c.displayValue === 'J' && ['♥','♦'].includes(c.displaySuit)));
+            if (defenseIdx > -1) {
+                let card = currentMover.hand[defenseIdx];
+                if (currentMover.hand.length === 2) currentMover.saidCard = true; // Auto-say 'Card'
+                p.hand.splice(defenseIdx, 1);
+                executeChainActions(room, [card], currentMover);
+            } else {
+                executeDrawAction(room, currentMover);
+            }
+            return;
+        }
+
+        // Standard Bot play scanning engine loops
+        let workingSingleCard = null;
+        for (let i = 0; i < currentMover.hand.length; i++) {
+            let card = currentMover.hand[i];
+            let order = getValidPermutation([card], room);
+            if (order) { workingSingleCard = card; break; }
+        }
+
+        if (workingSingleCard) {
+            if (currentMover.hand.length === 2) currentMover.saidCard = true;
+            currentMover.hand = currentMover.hand.filter(c => c !== workingSingleCard);
+            executeChainActions(room, [workingSingleCard], currentMover);
+        } else {
+            executeDrawAction(room, currentMover);
+        }
+    }, 3000); // 3-second delay so you can watch bots think and react
+}
