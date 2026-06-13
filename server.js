@@ -108,9 +108,7 @@ function getValidPermutation(cards, room) {
         for (let i = 0; i < order.length; i++) {
             let card = order[i];
             if (isValidStep(card, activeVal, activeSuit, suitOverride, i === 0)) {
-                activeVal = card.displayValue; 
-                activeSuit = card.displaySuit; 
-                suitOverride = null;
+                activeVal = card.displayValue; activeSuit = card.displaySuit; suitOverride = null;
             } else {
                 sequenceIsValid = false; break;
             }
@@ -196,6 +194,14 @@ io.on('connection', (socket) => {
         startCard.playedBy = "Dealer"; startCard.playerColor = "#aaaaaa";
         room.playedStack.push(startCard);
 
+        // CLOUD DEVICE ROUTING FIX: Iterate through players and message individual sockets directly
+        room.players.forEach(p => {
+            if (!p.isAI && io.sockets.sockets.get(p.id)) {
+                io.sockets.sockets.get(p.id).emit('gameStartedSignal', room);
+            }
+        });
+        
+        // Also send a fallback broadcast to ensure absolute synchronization
         io.to(roomCode).emit('gameStartedSignal', room);
         checkAndExecuteBotTurn(room);
     });
