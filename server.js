@@ -206,13 +206,11 @@ io.on('connection', (socket) => {
         const p = room.players.find(pl => pl.id === socket.id);
         if (!p || room.players[room.currentPlayerIdx].id !== socket.id) return;
 
-        // CRITICAL FIXED JOKER REGISTRY: Mutate Joker states on server before evaluating sequences
         if (jokerConfigurations) {
             jokerConfigurations.forEach(conf => {
                 if(p.hand[conf.index]) {
                     p.hand[conf.index].displayValue = conf.value;
                     p.hand[conf.index].displaySuit = conf.suit;
-                    // Keep track that this was originally a Joker for visual formatting downstream
                     p.hand[conf.index].isJoker = true; 
                 }
             });
