@@ -70,24 +70,17 @@ function isPickupCard(card) {
     return false;
 }
 
-// --- TOTALLY SIMPLIFIED BULLETPROOF STEP VALIDATOR ---
 function isValidStep(card, activeVal, activeSuit, suitOverride, isFirstCard) {
-    // 1. Aces are always legal wildcards on the first link of a play sequence
     if (isFirstCard && card.displayValue === 'A') return true;
-    
-    // 2. Matching numbers/values are instantly legal anywhere in the sequence
     if (card.displayValue === activeVal) return true;
     
-    // 3. Determine the actual legal target suit we need to compare against
     let targetSuit = (isFirstCard && suitOverride !== null) ? suitOverride : activeSuit;
     if (card.displaySuit === targetSuit) return true;
     
-    // 4. Queens can drop on their matching suit baseline, or continue an existing Queen chain
     if (card.displayValue === 'Q' || activeVal === 'Q') {
         if (isFirstCard) return (card.displaySuit === targetSuit || card.displayValue === activeVal);
         return true;
     }
-    
     return false;
 }
 
@@ -117,7 +110,7 @@ function getValidPermutation(cards, room) {
             if (isValidStep(card, activeVal, activeSuit, suitOverride, i === 0)) {
                 activeVal = card.displayValue; 
                 activeSuit = card.displaySuit; 
-                suitOverride = null; // Clear override tracking metadata once first step satisfies
+                suitOverride = null;
             } else {
                 sequenceIsValid = false; break;
             }
@@ -146,7 +139,6 @@ io.on('connection', (socket) => {
             isGameOver: false
         };
         socket.join(roomCode);
-        socket.emit('createRoom', rooms[roomCode]); // Compatibility handshake update
         socket.emit('roomCreated', rooms[roomCode]);
     });
 
@@ -214,11 +206,14 @@ io.on('connection', (socket) => {
         const p = room.players.find(pl => pl.id === socket.id);
         if (!p || room.players[room.currentPlayerIdx].id !== socket.id) return;
 
+        // CRITICAL FIXED JOKER REGISTRY: Mutate Joker states on server before evaluating sequences
         if (jokerConfigurations) {
             jokerConfigurations.forEach(conf => {
                 if(p.hand[conf.index]) {
                     p.hand[conf.index].displayValue = conf.value;
                     p.hand[conf.index].displaySuit = conf.suit;
+                    // Keep track that this was originally a Joker for visual formatting downstream
+                    p.hand[conf.index].isJoker = true; 
                 }
             });
         }
