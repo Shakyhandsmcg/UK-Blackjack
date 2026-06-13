@@ -34,7 +34,12 @@
         .card.selected { border: 3px solid #ffeb3b; transform: translateY(-15px); box-shadow: 0 8px 16px rgba(0,0,0,0.6); }
         .card.hidden-face { background: #b71c1c; border: 2px solid #fff; background-image: radial-gradient(rgba(255,255,255,0.15) 9px, transparent 10px), radial-gradient(rgba(255,255,255,0.15) 9px, transparent 10px); background-size: 20px 20px; background-position: 0 0, 10px 10px; }
         .badge { position: absolute; top: -12px; right: -12px; background: #ffeb3b; color: black; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; border: 2px solid black; z-index: 10; }
-        .joker-watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; color: #7b1fa2; border: 1px dashed #7b1fa2; padding: 2px 4px; border-radius: 4px; white-space: nowrap; background: rgba(255,255,255,0.8); pointer-events: none; }
+        
+        /* Updated Watermark Styling to fit both Jokers and transformed Aces */
+        .card-watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 12px; font-weight: bold; pointer-events: none; text-align: center; white-space: nowrap; }
+        .joker-watermark { color: #7b1fa2; border: 1px dashed #7b1fa2; padding: 2px 4px; border-radius: 4px; background: rgba(255,255,255,0.8); }
+        .ace-ghost-watermark { font-size: 32px; color: rgba(0, 0, 0, 0.12); font-weight: normal; }
+
         .player-section { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
         .player-section.active { border: 2px solid #4caf50; background: rgba(76, 175, 80, 0.12); }
         .player-header-row { display: flex; justify-content: space-between; align-items: center; }
@@ -262,7 +267,7 @@ function updateGameplayUI(room) {
     
     let statusText = room.isGameOver ? "Match Finished!" : `Turn: ${activePlayer.name}`;
     if (!room.isGameOver && room.activePickupCount > 0) statusText += ` | ⚠️ Next Draws (${room.activePickupCount})`;
-    if (!room.isGameOver && room.activeSuitOverride) statusText += ` | Suit: ${room.activeSuitOverride}`;
+    if (!room.isGameOver && room.activeSuitOverride) statusText += ` | Suit Called: ${room.activeSuitOverride}`;
     document.getElementById('status-text').innerText = statusText;
     document.getElementById('back-to-home-btn').style.display = room.isGameOver ? 'block' : 'none';
 
@@ -271,7 +276,11 @@ function updateGameplayUI(room) {
     for(let i=start; i<room.playedStack.length-1; i++) {
         let cData = room.playedStack[i];
         let wrap = document.createElement('div'); wrap.className = 'card-wrapper';
-        wrap.appendChild(renderCardGraphic(cData, i, true, false));
+        
+        // Pass true for historical elements if an override condition existed
+        let hasOverride = (i === room.playedStack.length - 2 && room.activeSuitOverride !== null);
+        wrap.appendChild(renderCardGraphic(cData, i, true, false, hasOverride ? room.activeSuitOverride : null));
+        
         if (i === start || room.playedStack[i-1].playedBy !== cData.playedBy) {
             let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = cData.playerColor;
             let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = cData.playerColor; tag.innerText = cData.playedBy;
@@ -283,7 +292,10 @@ function updateGameplayUI(room) {
     let topCont = document.getElementById('current-card-container'); topCont.innerHTML = '';
     if (currentTop) {
         let wrap = document.createElement('div'); wrap.className = 'card-wrapper';
-        wrap.appendChild(renderCardGraphic(currentTop, room.playedStack.length-1, true, false));
+        
+        // Apply the live suit override to the main visible top card graphic
+        wrap.appendChild(renderCardGraphic(currentTop, room.playedStack.length-1, true, false, room.activeSuitOverride));
+        
         let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = currentTop.playerColor;
         let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = currentTop.playerColor; tag.innerText = currentTop.playedBy;
         ln.appendChild(tag); wrap.appendChild(ln); topCont.appendChild(wrap);
@@ -314,7 +326,7 @@ function updateGameplayUI(room) {
         p.hand.forEach((card, cIdx) => {
             let revealFace = isMe && !p.out && !p.isAI;
             let clickable = isActive && isMe && !p.out && !p.isAI;
-            handDiv.appendChild(renderCardGraphic(card, cIdx, revealFace, clickable));
+            handDiv.appendChild(renderCardGraphic(card, cIdx, revealFace, clickable, null));
         });
         sec.appendChild(handDiv);
 
@@ -329,11 +341,16 @@ function updateGameplayUI(room) {
     });
 }
 
-function renderCardGraphic(card, index, showFace, interactive) {
+// DYNAMIC ADAPTIVE GRAPHIC GENERATOR: Handles Ace morphological suit morph transformation states
+function renderCardGraphic(card, index, showFace, interactive, activeSuitOverride) {
     let div = document.createElement('div');
     if (!showFace) { div.className = 'card hidden-face'; return div; }
 
-    let isRed = card.displaySuit === '♥' || card.displaySuit === '♦';
+    // Read the values to use for layout display formatting
+    let finalValue = card.displayValue;
+    let finalSuit = (card.displayValue === 'A' && activeSuitOverride !== null) ? activeSuitOverride : card.displaySuit;
+
+    let isRed = finalSuit === '♥' || finalSuit === '♦';
     div.className = `card ${isRed ? 'red' : ''}`;
 
     let sel = selectedCards.find(s => s.index === index);
@@ -342,11 +359,19 @@ function renderCardGraphic(card, index, showFace, interactive) {
         let bd = document.createElement('div'); bd.className = 'badge'; bd.innerText = sel.order; div.appendChild(bd);
     }
 
-    let top = document.createElement('div'); top.innerText = card.displayValue + card.displaySuit; div.appendChild(top);
+    // Top indicator line
+    let top = document.createElement('div'); top.innerText = finalValue + finalSuit; div.appendChild(top);
+    
+    // Middle section rendering engine (Jokers vs Ghosted Ace watermark signatures)
     if (card.isJoker) {
-        let wm = document.createElement('div'); wm.className = 'joker-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
+        let wm = document.createElement('div'); wm.className = 'card-watermark joker-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
+    } else if (card.displayValue === 'A' && activeSuitOverride !== null) {
+        // Build the faded original design asset context indicator container inside mutated card bodies
+        let ghost = document.createElement('div'); ghost.className = 'card-watermark ace-ghost-watermark'; ghost.innerText = card.displaySuit; div.appendChild(ghost);
     }
-    let bot = document.createElement('div'); bot.innerText = card.displayValue + card.displaySuit; bot.style.textAlign = 'right'; div.appendChild(bot);
+    
+    // Bottom indicator line
+    let bot = document.createElement('div'); bot.innerText = finalValue + finalSuit; bot.style.textAlign = 'right'; div.appendChild(bot);
 
     if (interactive) {
         div.onclick = () => toggleSelectClient(index, card.isJoker);
@@ -355,7 +380,6 @@ function renderCardGraphic(card, index, showFace, interactive) {
     return div;
 }
 
-// Fixed missing variable scope reference error hook inside popup transforms
 function promptJokerModal(cardIdx) {
     let container = document.createElement('div'); container.style.display = 'flex'; container.style.flexDirection = 'column'; container.style.gap = '10px';
     let sPara = document.createElement('p'); sPara.innerText = "1. Pick Suit:"; container.appendChild(sPara);
