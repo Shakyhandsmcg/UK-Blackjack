@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UK Blackjack - Wireless Multi-Device</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        :root { --card-width: 85px; --card-height: 125px; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #143d22; color: white; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        #game-container { width: 100%; max-width: 900px; display: none; }
+        #menu-container { background: rgba(0, 0, 0, 0.7); padding: 30px; border-radius: 12px; text-align: center; box-shadow: 0 8px 16px rgba(0,0,0,0.5); border: 2px solid #275d39; margin-top: 30px; max-width: 450px; width: 100%; box-sizing: border-box; }
+        .menu-panel { background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-top: 15px; border: 1px solid rgba(255,255,255,0.1); }
+        input, select { width: 90%; padding: 10px; margin: 8px 0; border-radius: 6px; border: 1px solid #ccc; font-size: 1em; box-sizing: border-box; }
+        button { padding: 12px 24px; font-size: 14px; font-weight: bold; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        .btn-blue { background: #2196f3; color: white; width: 100%; margin-top: 10px; }
+        .btn-green { background: #4caf50; color: white; width: 100%; margin-top: 10px; }
+        .btn-play { background: #4caf50; color: white; }
+        .btn-draw { background: #2196f3; color: white; }
+        .btn-card { background: #ff9800; color: white; }
+        .btn-sort { background: #607d8b; color: white; padding: 6px 12px; font-size: 11px; margin-left: 5px; }
+        .btn-home { background: #f44336; color: white; font-size: 1.1em; margin: 20px auto; display: block; }
+        .status-bar { background: rgba(0,0,0,0.5); padding: 12px; border-radius: 6px; margin-bottom: 20px; text-align: center; font-weight: bold; font-size: 1.1em; border: 1px solid #275d39; }
+        #main-stack-area { background: rgba(0,0,0,0.2); border-radius: 10px; padding: 15px; margin-bottom: 25px; width: 100%; box-sizing: border-box; }
+        .stack-row-container { display: flex; align-items: flex-start; justify-content: center; gap: 20px; }
+        .stack-history { display: flex; gap: 8px; }
+        .stack-history .card-wrapper { opacity: 0.5; transform: scale(0.85); }
+        .card-wrapper { display: flex; flex-direction: column; align-items: center; }
+        .card-owner-line { width: 100%; height: 3px; margin-top: 6px; position: relative; border-radius: 2px; }
+        .card-owner-name { font-size: 11px; background: #143d22; padding: 0 4px; position: absolute; top: -7px; left: 50%; transform: translateX(-50%); white-space: nowrap; border-radius: 3px; font-weight: bold; }
+        .card { width: var(--card-width); height: var(--card-height); background: white; color: black; border-radius: 8px; border: 2px solid #ccc; display: flex; flex-direction: column; justify-content: space-between; padding: 8px; box-sizing: border-box; position: relative; user-select: none; box-shadow: 0 4px 8px rgba(0,0,0,0.4); font-weight: bold; font-size: 1.2em; }
+        .card.red { color: #d32f2f; }
+        .card.selected { border: 3px solid #ffeb3b; transform: translateY(-15px); box-shadow: 0 8px 16px rgba(0,0,0,0.6); }
+        .card.hidden-face { background: #b71c1c; border: 2px solid #fff; background-image: radial-gradient(rgba(255,255,255,0.15) 9px, transparent 10px), radial-gradient(rgba(255,255,255,0.15) 9px, transparent 10px); background-size: 20px 20px; background-position: 0 0, 10px 10px; }
+        .badge { position: absolute; top: -12px; right: -12px; background: #ffeb3b; color: black; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; border: 2px solid black; z-index: 10; }
+        .joker-watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; color: #7b1fa2; border: 1px dashed #7b1fa2; padding: 2px 4px; border-radius: 4px; white-space: nowrap; background: rgba(255,255,255,0.8); pointer-events: none; }
+        .player-section { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
+        .player-section.active { border: 2px solid #4caf50; background: rgba(76, 175, 80, 0.12); }
+        .player-header-row { display: flex; justify-content: space-between; align-items: center; }
+        .hand { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; min-height: 140px; padding: 10px 0; }
+        .controls { margin-top: 15px; display: flex; gap: 12px; }
+        .modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #f5f5f5; color: black; padding: 25px; border-radius: 12px; box-shadow: 0 0 30px rgba(0,0,0,0.7); z-index: 100; flex-direction: column; gap: 15px; max-width: 400px; }
+        .modal-options { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+        .modal-options button { background: #e0e0e0; color: black; padding: 10px 15px; }
+        .overlay { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.6); z-index: 99; }
+        #lobby-waiting { display: none; margin-top: 20px; font-weight: bold; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+
+<div id="menu-container">
+    <h2>UK BLACKJACK ONLINE</h2>
+    <div class="menu-panel" id="host-panel">
+        <h3>Host a New Game</h3>
+        <input type="text" id="host-name-in" placeholder="Your Name" value="Player 1">
+        <select id="max-players-select">
+            <option value="2">2 Players</option>
+            <option value="3">3 Players</option>
+            <option value="4" selected>4 Players</option>
+        </select>
+        <button class="btn-green" onclick="hostRoom()">Create Room</button>
+    </div>
+    <div class="menu-panel" id="join-panel">
+        <h3>Join an Existing Game</h3>
+        <input type="text" id="join-name-in" placeholder="Your Name" value="Player 2">
+        <input type="text" id="room-code-in" placeholder="ENTER 4-LETTER CODE" maxlength="4" style="text-transform: uppercase;">
+        <button class="btn-blue" onclick="joinRoom()">Join Room Code</button>
+    </div>
+    <div id="lobby-waiting">
+        <p style="color: #ffeb3b; font-size: 1.4em;">ROOM CODE: <span id="display-room-code">----</span></p>
+        <p>Players in Lobby (<span id="lobby-count">0</span>/<span id="lobby-max">0</span>):</p>
+        <div id="lobby-player-list" style="margin: 15px 0; text-align: left; padding-left: 30px;"></div>
+        <button id="start-game-lobby-btn" class="btn-green" style="display:none;" onclick="launchGame()">Launch Game</button>
+    </div>
+</div>
+
+<div id="game-container">
+    <div class="status-bar" id="status-text">Connecting to room engine...</div>
+    <div id="main-stack-area">
+        <div class="stack-row-container">
+            <div class="stack-history" id="stack-history"></div>
+            <div id="current-card-container"></div>
+        </div>
+    </div>
+    <div id="players-area"></div>
+    <button id="back-to-home-btn" class="btn-home" style="display: none;" onclick="window.location.reload()">Exit Room</button>
+</div>
+
+<div class="overlay" id="modal-overlay"></div>
+<div class="modal" id="choice-modal">
+    <h3 id="modal-title">Select Option</h3>
+    <div class="modal-options" id="modal-options"></div>
+</div>
+
+<script>
+const socket = io();
+let myId = null;
+let currentRoom = null;
+let selectedCards = [];
+let pendingJokerConvs = []; 
+let draggedCardIdx = null;
+
+const VALUE_WEIGHTS = { 'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13, 'Joker':99 };
+const SUIT_WEIGHTS = { '♠':1, '♥':2, '♦':3, '♣':4, '🃏':99 };
+
+socket.on('roomCreated', (room) => { myId = socket.id; displayLobby(room); });
+socket.on('joinSuccess', ({ room, myId: sId }) => { myId = sId; displayLobby(room); });
+socket.on('roomUpdated', (room) => { displayLobby(room); });
+socket.on('gameStateSynced', (room) => { updateGameplayUI(room); });
+socket.on('errorMsg', (msg) => alert(msg));
+
+socket.on('gameStartedSignal', (room) => {
+    document.getElementById('menu-container').style.display = 'none';
+    document.getElementById('game-container').style.display = 'block';
+    updateGameplayUI(room);
+});
+
+socket.on('promptAceSelectionNetwork', ({ room, playerId }) => {
+    currentRoom = room;
+    if (playerId === myId) {
+        let row = document.createElement('div'); row.className = "modal-options";
+        ['♠', '♥', '♦', '♣'].forEach(s => {
+            let b = document.createElement('button'); b.style.fontSize = "24px"; b.innerText = s;
+            b.onclick = () => { socket.emit('submitAceOverride', { roomCode: room.code, suit: s }); hideModal(); };
+            row.appendChild(b);
+        });
+        showModal("Ace Suit Choice Selection", row);
+    } else {
+        updateGameplayUI(room);
+    }
+});
+
+function hostRoom() {
+    const name = document.getElementById('host-name-in').value.trim();
+    const maxP = document.getElementById('max-players-select').value;
+    if(!name) return alert("Enter Name");
+    socket.emit('createRoom', { hostName: name, maxPlayers: maxP });
+}
+
+function joinRoom() {
+    const name = document.getElementById('join-name-in').value.trim();
+    const code = document.getElementById('room-code-in').value.trim().toUpperCase();
+    if(!name || !code) return alert("Enter Info");
+    socket.emit('joinRoom', { name, roomCode: code });
+}
+
+function launchGame() {
+    socket.emit('startGameServer', { roomCode: currentRoom.code });
+}
+
+function displayLobby(room) {
+    currentRoom = room;
+    document.getElementById('host-panel').style.display = 'none';
+    document.getElementById('join-panel').style.display = 'none';
+    document.getElementById('lobby-waiting').style.display = 'block';
+    document.getElementById('display-room-code').innerText = room.code;
+    document.getElementById('lobby-count').innerText = room.players.length;
+    document.getElementById('lobby-max').innerText = room.maxPlayers;
+    
+    let listArea = document.getElementById('lobby-player-list'); listArea.innerHTML = '';
+    let amIHost = false;
+    room.players.forEach(p => {
+        let pDiv = document.createElement('div'); pDiv.style.color = p.color;
+        pDiv.innerText = `• ${p.name} ${p.id === myId ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''}`;
+        listArea.appendChild(pDiv);
+        if(p.id === myId && p.isHost) amIHost = true;
+    });
+    document.getElementById('start-game-lobby-btn').style.display = (amIHost && room.players.length >= 2) ? 'block' : 'none';
+}
+
+function playSelectionNetwork() {
+    if(selectedCards.length === 0) return;
+    let sortedSel = [...selectedCards].sort((a,b) => a.order - b.order);
+    let rawIndices = sortedSel.map(s => s.index);
+
+    socket.emit('playCards', {
+        roomCode: currentRoom.code,
+        cardIndices: rawIndices,
+        jokerConfigurations: pendingJokerConvs
+    });
+    selectedCards = []; pendingJokerConvs = [];
+}
+
+function drawOrPassNetwork() {
+    socket.emit('drawOrPass', { roomCode: currentRoom.code });
+    selectedCards = []; pendingJokerConvs = [];
+}
+
+function sayCardNetwork() {
+    socket.emit('sayCardDeclaration', { roomCode: currentRoom.code });
+}
+
+function sortHandClient(type) {
+    const me = currentRoom.players.find(pl => pl.id === myId);
+    if (!me) return;
+    me.hand.sort((a,b) => {
+        if (type === 'SUIT') {
+            let sDiff = (SUIT_WEIGHTS[a.displaySuit]||0) - (SUIT_WEIGHTS[b.displaySuit]||0);
+            if(sDiff !== 0) return sDiff;
+            return (VALUE_WEIGHTS[a.displayValue]||0) - (VALUE_WEIGHTS[b.displayValue]||0);
+        } else {
+            let vDiff = (VALUE_WEIGHTS[a.displayValue]||0) - (VALUE_WEIGHTS[b.displayValue]||0);
+            if(vDiff !== 0) return vDiff;
+            return (SUIT_WEIGHTS[a.displaySuit]||0) - (SUIT_WEIGHTS[b.displaySuit]||0);
+        }
+    });
+    selectedCards = [];
+    pendingJokerConvs = [];
+    
+    socket.emit('rearrangeHand', { roomCode: currentRoom.code, newHand: me.hand });
+    updateGameplayUI(currentRoom);
+}
+
+function setupDragDrop(cardDiv, cardIdx) {
+    cardDiv.draggable = true;
+    cardDiv.ondragstart = (e) => { draggedCardIdx = cardIdx; e.dataTransfer.effectAllowed = 'move'; };
+    cardDiv.ondragover = (e) => e.preventDefault();
+    cardDiv.ondrop = (e) => {
+        e.preventDefault();
+        if(draggedCardIdx === null || draggedCardIdx === cardIdx) return;
+        const me = currentRoom.players.find(pl => pl.id === myId);
+        let moved = me.hand.splice(draggedCardIdx, 1)[0];
+        me.hand.splice(cardIdx, 0, moved);
+        draggedCardIdx = null; selectedCards = [];
+        socket.emit('rearrangeHand', { roomCode: currentRoom.code, newHand: me.hand });
+    };
+}
+
+function toggleSelectClient(cardIdx, isJoker) {
+    let exist = selectedCards.findIndex(s => s.index === cardIdx);
+    if (exist > -1) {
+        selectedCards.splice(exist, 1);
+        selectedCards.forEach((s, idx) => s.order = idx + 1);
+        updateGameplayUI(currentRoom);
+    } else {
+        if (isJoker) {
+            promptJokerModal(cardIdx);
+        } else {
+            selectedCards.push({ index: cardIdx, order: selectedCards.length + 1 });
+            updateGameplayUI(currentRoom);
+        }
+    }
+}
+
+function updateGameplayUI(room) {
+    currentRoom = room;
+    let currentTop = room.playedStack[room.playedStack.length - 1];
+    let activePlayer = room.players[room.currentPlayerIdx];
+    
+    let statusText = room.isGameOver ? "Match Finished!" : `Turn: ${activePlayer.name}`;
+    if (!room.isGameOver && room.activePickupCount > 0) statusText += ` | ⚠️ Next Draws (${room.activePickupCount})`;
+    if (!room.isGameOver && room.activeSuitOverride) statusText += ` | Suit: ${room.activeSuitOverride}`;
+    document.getElementById('status-text').innerText = statusText;
+    document.getElementById('back-to-home-btn').style.display = room.isGameOver ? 'block' : 'none';
+
+    let hist = document.getElementById('stack-history'); hist.innerHTML = '';
+    let start = Math.max(0, room.playedStack.length - 6);
+    for(let i=start; i<room.playedStack.length-1; i++) {
+        let cData = room.playedStack[i];
+        let wrap = document.createElement('div'); wrap.className = 'card-wrapper';
+        wrap.appendChild(renderCardGraphic(cData, i, true, false));
+        if (i === start || room.playedStack[i-1].playedBy !== cData.playedBy) {
+            let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = cData.playerColor;
+            let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = cData.playerColor; tag.innerText = cData.playedBy;
+            ln.appendChild(tag); wrap.appendChild(ln);
+        }
+        hist.appendChild(wrap);
+    }
+
+    let topCont = document.getElementById('current-card-container'); topCont.innerHTML = '';
+    if (currentTop) {
+        let wrap = document.createElement('div'); wrap.className = 'card-wrapper';
+        wrap.appendChild(renderCardGraphic(currentTop, room.playedStack.length-1, true, false));
+        let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = currentTop.playerColor;
+        let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = currentTop.playerColor; tag.innerText = currentTop.playedBy;
+        ln.appendChild(tag); wrap.appendChild(ln); topCont.appendChild(wrap);
+    }
+
+    let area = document.getElementById('players-area'); area.innerHTML = '';
+    room.players.forEach((p, pIdx) => {
+        let isActive = (!room.isGameOver && pIdx === room.currentPlayerIdx);
+        let isMe = (p.id === myId);
+        
+        let sec = document.createElement('div'); sec.className = `player-section ${isActive ? 'active' : ''}`;
+        let headRow = document.createElement('div'); headRow.className = 'player-header-row';
+        let h4 = document.createElement('h4'); h4.style.margin = '0'; h4.style.color = p.color;
+        
+        let addon = p.out ? ` - [OUT / ${getOrdinal(p.rank)}]` : (p.saidCard ? ` - [SAID CARD]` : '');
+        h4.innerText = `${p.name} (${p.hand.length} Cards)${addon}`;
+        headRow.appendChild(h4);
+
+        if (isActive && isMe && !p.out) {
+            let sBox = document.createElement('div');
+            let bS = document.createElement('button'); bS.className = 'btn-sort'; bS.innerText = 'Sort Suit'; bS.onclick = () => sortHandClient('SUIT');
+            let bN = document.createElement('button'); bN.className = 'btn-sort'; bN.innerText = 'Sort Number'; bN.onclick = () => sortHandClient('NUMBER');
+            sBox.appendChild(bS); sBox.appendChild(bN); headRow.appendChild(sBox);
+        }
+        sec.appendChild(headRow);
+
+        let handDiv = document.createElement('div'); handDiv.className = 'hand';
+        p.hand.forEach((card, cIdx) => {
+            let revealFace = isMe && !p.out;
+            let clickable = isActive && isMe && !p.out;
+            handDiv.appendChild(renderCardGraphic(card, cIdx, revealFace, clickable));
+        });
+        sec.appendChild(handDiv);
+
+        if (isActive && isMe && !p.out) {
+            let ctrl = document.createElement('div'); ctrl.className = 'controls';
+            let pBtn = document.createElement('button'); pBtn.className = 'btn-play'; pBtn.innerText = 'Play Selection'; pBtn.onclick = playSelectionNetwork;
+            let dBtn = document.createElement('button'); dBtn.className = 'btn-draw'; dBtn.innerText = room.activePickupCount > 0 ? `Pick up (${room.activePickupCount})` : 'Draw / Pass'; dBtn.onclick = drawOrPassNetwork;
+            let cBtn = document.createElement('button'); cBtn.className = 'btn-card'; cBtn.innerText = "Say 'Card'"; cBtn.onclick = sayCardNetwork;
+            ctrl.appendChild(pBtn); ctrl.appendChild(dBtn); ctrl.appendChild(cBtn); sec.appendChild(ctrl);
+        }
+        area.appendChild(sec);
+    });
+}
+
+function renderCardGraphic(card, index, showFace, interactive) {
+    let div = document.createElement('div');
+    if (!showFace) { div.className = 'card hidden-face'; return div; }
+
+    let isRed = card.displaySuit === '♥' || card.displaySuit === '♦';
+    div.className = `card ${isRed ? 'red' : ''}`;
+
+    let sel = selectedCards.find(s => s.index === index);
+    if (interactive && sel) {
+        div.classList.add('selected');
+        let bd = document.createElement('div'); bd.className = 'badge'; bd.innerText = sel.order; div.appendChild(bd);
+    }
+
+    let top = document.createElement('div'); top.innerText = card.displayValue + card.displaySuit; div.appendChild(top);
+    if (card.isJoker) {
+        let wm = document.createElement('div'); wm.className = 'joker-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
+    }
+    let bot = document.createElement('div'); bot.innerText = card.displayValue + card.displaySuit; bot.style.textAlign = 'right'; div.appendChild(bot);
+
+    if (interactive) {
+        div.onclick = () => toggleSelectClient(index, card.isJoker);
+        setupDragDrop(div, index);
+    }
+    return div;
+}
+
+function promptJokerModal(cardIdx) {
+    let container = document.createElement('div'); container.style.display = 'flex'; container.style.flexDirection = 'column'; container.style.gap = '10px';
+    let sPara = document.createElement('p'); sPara.innerText = "1. Pick Suit:"; container.appendChild(sPara);
+    let sRow = document.createElement('div'); sRow.className = "modal-options";
+    let chosenSuit = '♥';
+    ['♠', '♥', '♦', '♣'].forEach(s => {
+        let b = document.createElement('button'); b.innerText = s;
+        b.onclick = () => { chosenSuit = s; sBtns.forEach(btn => btn.style.background = '#e0e0e0'); b.style.background = '#ffeb3b'; };
+        sRow.appendChild(b);
+    });
+    let sBtns = Array.from(sRow.children); sBtns[0].style.background = '#ffeb3b'; container.appendChild(sRow);
+
+    let vPara = document.createElement('p'); vPara.innerText = "2. Pick Value:"; container.appendChild(vPara);
+    let vRow = document.createElement('div'); vRow.className = "modal-options";
+    ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].forEach(v => {
+        let b = document.createElement('button'); b.innerText = v;
+        b.onclick = () => {
+            pendingJokerConvs.push({ index: cardIdx, value: v, suit: chosenSuit });
+            selectedCards.push({ index: cardIdx, order: selectedCards.length + 1 });
+            hideModal();
+            updateGameplayUI(currentRoom);
+        };
+        vRow.appendChild(b);
+    });
+    container.appendChild(vRow); showModal("Convert Joker Identity", container);
+}
+
+function showModal(title, HTMLContent) {
+    document.getElementById('modal-title').innerText = title;
+    let opt = document.getElementById('modal-options'); opt.innerHTML = ''; opt.appendChild(HTMLContent);
+    document.getElementById('choice-modal').style.display = 'flex'; document.getElementById('modal-overlay').style.display = 'block';
+}
+function hideModal() { document.getElementById('choice-modal').style.display = 'none'; document.getElementById('modal-overlay').style.display = 'none'; }
+function getOrdinal(v) { if (!v) return ""; let j = v % 10, k = v % 100; if (j == 1 && k != 11) return v + "st Place"; if (j == 2 && k != 12) return v + "nd Place"; if (j == 3 && k != 13) return v + "rd Place"; return v + "th Place"; }
+</script>
+</body>
+</html>
