@@ -5,16 +5,11 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-
 const io = new Server(server, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    }
+    cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
 const PORT = process.env.PORT || 3000;
-
 app.use(express.static(path.join(__dirname)));
 
 const rooms = {};
@@ -50,10 +45,7 @@ function shuffle(deck) {
 function permute(arr) {
     let res = [];
     function helper(current, remaining) {
-        if (remaining.length === 0) {
-            res.push(current);
-            return;
-        }
+        if (remaining.length === 0) { res.push(current); return; }
         for (let i = 0; i < remaining.length; i++) {
             let nextCurrent = current.concat([remaining[i]]);
             let nextRemaining = remaining.slice(0, i).concat(remaining.slice(i + 1));
@@ -73,10 +65,8 @@ function isPickupCard(card) {
 function isValidStep(card, activeVal, activeSuit, suitOverride, isFirstCard) {
     if (isFirstCard && card.displayValue === 'A') return true;
     if (card.displayValue === activeVal) return true;
-    
     let targetSuit = (isFirstCard && suitOverride !== null) ? suitOverride : activeSuit;
     if (card.displaySuit === targetSuit) return true;
-    
     if (card.displayValue === 'Q' || activeVal === 'Q') {
         if (isFirstCard) return (card.displaySuit === targetSuit || card.displayValue === activeVal);
         return true;
@@ -119,7 +109,6 @@ function getValidPermutation(cards, room) {
 }
 
 io.on('connection', (socket) => {
-    
     socket.on('createRoom', ({ hostName, maxPlayers }) => {
         const roomCode = generateRoomCode();
         rooms[roomCode] = {
@@ -167,10 +156,8 @@ io.on('connection', (socket) => {
         room.players.push({
             id: `bot-${Math.random().toString(36).substr(2, 5)}`,
             name: `CPU Bot ${botIndex}`,
-            hand: [], saidCard: false, out: false, rank: null,
-            color: botColor, isHost: false, isAI: true
+            hand: [], saidCard: false, out: false, rank: null, color: botColor, isHost: false, isAI: true
         });
-
         io.to(roomCode).emit('roomUpdated', room);
     });
 
@@ -194,14 +181,6 @@ io.on('connection', (socket) => {
         startCard.playedBy = "Dealer"; startCard.playerColor = "#aaaaaa";
         room.playedStack.push(startCard);
 
-        // CLOUD DEVICE ROUTING FIX: Iterate through players and message individual sockets directly
-        room.players.forEach(p => {
-            if (!p.isAI && io.sockets.sockets.get(p.id)) {
-                io.sockets.sockets.get(p.id).emit('gameStartedSignal', room);
-            }
-        });
-        
-        // Also send a fallback broadcast to ensure absolute synchronization
         io.to(roomCode).emit('gameStartedSignal', room);
         checkAndExecuteBotTurn(room);
     });
@@ -217,7 +196,7 @@ io.on('connection', (socket) => {
                 if(p.hand[conf.index]) {
                     p.hand[conf.index].displayValue = conf.value;
                     p.hand[conf.index].displaySuit = conf.suit;
-                    p.hand[conf.index].isJoker = true; 
+                    p.hand[conf.index].isJoker = true;
                 }
             });
         }
@@ -228,7 +207,6 @@ io.on('connection', (socket) => {
         
         p.hand = p.hand.filter((_, idx) => !cardIndices.includes(idx));
         room.activeSuitOverride = null;
-
         executeChainActions(room, workingOrderChain, p);
     });
 
