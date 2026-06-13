@@ -101,6 +101,7 @@
 
 <script>
 const socket = io();
+let myId = null;
 let currentRoom = null;
 let selectedCards = [];
 let pendingJokerConvs = []; 
@@ -109,13 +110,14 @@ let draggedCardIdx = null;
 const VALUE_WEIGHTS = { 'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13, 'Joker':99 };
 const SUIT_WEIGHTS = { '♠':1, '♥':2, '♦':3, '♣':4, '🃏':99 };
 
-socket.on('roomCreated', (room) => { displayLobby(room); });
-socket.on('joinSuccess', ({ room }) => { displayLobby(room); });
+socket.on('roomCreated', (room) => { myId = socket.id; displayLobby(room); });
+socket.on('joinSuccess', ({ room, myId: sId }) => { myId = sId; displayLobby(room); });
 socket.on('roomUpdated', (room) => { displayLobby(room); });
 socket.on('gameStateSynced', (room) => { updateGameplayUI(room); });
 socket.on('errorMsg', (msg) => alert(msg));
 
 socket.on('gameStartedSignal', (room) => {
+    currentRoom = room;
     document.getElementById('menu-container').style.display = 'none';
     document.getElementById('game-container').style.display = 'block';
     updateGameplayUI(room);
@@ -123,7 +125,7 @@ socket.on('gameStartedSignal', (room) => {
 
 socket.on('promptAceSelectionNetwork', ({ room, playerId }) => {
     currentRoom = room;
-    if (playerId === socket.id) {
+    if (playerId === myId) {
         let row = document.createElement('div'); row.className = "modal-options";
         ['♠', '♥', '♦', '♣'].forEach(s => {
             let b = document.createElement('button'); b.style.fontSize = "24px"; b.innerText = s;
@@ -171,9 +173,9 @@ function displayLobby(room) {
     let amIHost = false;
     room.players.forEach(p => {
         let pDiv = document.createElement('div'); pDiv.style.color = p.color;
-        pDiv.innerText = `• ${p.name} ${p.id === socket.id ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
+        pDiv.innerText = `• ${p.name} ${p.id === myId ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
         listArea.appendChild(pDiv);
-        if(p.id === socket.id && p.isHost) amIHost = true;
+        if(p.id === myId && p.isHost) amIHost = true;
     });
     
     if (amIHost) {
@@ -203,9 +205,12 @@ function drawOrPassNetwork() {
     selectedCards = []; pendingJokerConvs = [];
 }
 
+function sayCardNetwork() {
+    socket.emit('sayCardDeclaration', { roomCode: currentRoom.code });
+}
+
 function sortHandClient(type) {
-    if (!socket.id) return;
-    const me = currentRoom.players.find(pl => pl.id === socket.id);
+    const me = currentRoom.players.find(pl => pl.id === myId);
     if (!me) return;
     me.hand.sort((a,b) => {
         if (type === 'SUIT') {
@@ -231,9 +236,8 @@ function setupDragDrop(cardDiv, cardIdx) {
     cardDiv.ondragover = (e) => e.preventDefault();
     cardDiv.ondrop = (e) => {
         e.preventDefault();
-        if(draggedCardIdx === null || draggedCardIdx === cardIdx || !socket.id) return;
-        const me = currentRoom.players.find(pl => pl.id === socket.id);
-        if(!me) return;
+        if(draggedCardIdx === null || draggedCardIdx === cardIdx) return;
+        const me = currentRoom.players.find(pl => pl.id === myId);
         let moved = me.hand.splice(draggedCardIdx, 1)[0];
         me.hand.splice(cardIdx, 0, moved);
         draggedCardIdx = null; selectedCards = [];
@@ -298,7 +302,7 @@ function updateGameplayUI(room) {
     let area = document.getElementById('players-area'); area.innerHTML = '';
     room.players.forEach((p, pIdx) => {
         let isActive = (!room.isGameOver && pIdx === room.currentPlayerIdx);
-        let isMe = (socket.id && p.id === socket.id);
+        let isMe = (p.id === myId);
         
         let sec = document.createElement('div'); sec.className = `player-section ${isActive ? 'active' : ''}`;
         let headRow = document.createElement('div'); headRow.className = 'player-header-row';
@@ -317,8 +321,6 @@ function updateGameplayUI(room) {
         sec.appendChild(headRow);
 
         let handDiv = document.createElement('div'); handDiv.className = 'hand';
-        
-        // CRITICAL GHOST GUARD CLAUSE: Ensure p.hand array is fully initialized before looping templates
         if (p.hand && Array.isArray(p.hand)) {
             p.hand.forEach((card, cIdx) => {
                 let revealFace = isMe && !p.out && !p.isAI;
@@ -353,7 +355,6 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
         finalValue = localJokerConfig.value;
         finalSuit = localJokerConfig.suit;
     }
-
     if (card.displayValue === 'A' && activeSuitOverride !== null) {
         finalSuit = activeSuitOverride;
     }
