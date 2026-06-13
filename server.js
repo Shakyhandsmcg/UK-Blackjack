@@ -6,7 +6,6 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 
-// PRODUCTION FIX: Explicitly configure CORS permissions for cloud-hosted environments
 const io = new Server(server, {
     cors: {
         origin: "*",
@@ -71,15 +70,24 @@ function isPickupCard(card) {
     return false;
 }
 
+// --- TOTALLY SIMPLIFIED BULLETPROOF STEP VALIDATOR ---
 function isValidStep(card, activeVal, activeSuit, suitOverride, isFirstCard) {
+    // 1. Aces are always legal wildcards on the first link of a play sequence
     if (isFirstCard && card.displayValue === 'A') return true;
+    
+    // 2. Matching numbers/values are instantly legal anywhere in the sequence
     if (card.displayValue === activeVal) return true;
-    let targetSuit = (suitOverride !== null) ? suitOverride : activeSuit;
+    
+    // 3. Determine the actual legal target suit we need to compare against
+    let targetSuit = (isFirstCard && suitOverride !== null) ? suitOverride : activeSuit;
     if (card.displaySuit === targetSuit) return true;
+    
+    // 4. Queens can drop on their matching suit baseline, or continue an existing Queen chain
     if (card.displayValue === 'Q' || activeVal === 'Q') {
         if (isFirstCard) return (card.displaySuit === targetSuit || card.displayValue === activeVal);
         return true;
     }
+    
     return false;
 }
 
@@ -107,7 +115,9 @@ function getValidPermutation(cards, room) {
         for (let i = 0; i < order.length; i++) {
             let card = order[i];
             if (isValidStep(card, activeVal, activeSuit, suitOverride, i === 0)) {
-                activeVal = card.displayValue; activeSuit = card.displaySuit; suitOverride = null;
+                activeVal = card.displayValue; 
+                activeSuit = card.displaySuit; 
+                suitOverride = null; // Clear override tracking metadata once first step satisfies
             } else {
                 sequenceIsValid = false; break;
             }
@@ -136,6 +146,7 @@ io.on('connection', (socket) => {
             isGameOver: false
         };
         socket.join(roomCode);
+        socket.emit('createRoom', rooms[roomCode]); // Compatibility handshake update
         socket.emit('roomCreated', rooms[roomCode]);
     });
 
@@ -389,5 +400,4 @@ function checkAndExecuteBotTurn(room) {
     }, 3000); 
 }
 
-// PRODUCTION FIX: Bind strictly to '0.0.0.0' so Render can catch incoming websocket handshakes globally
 server.listen(PORT, '0.0.0.0', () => console.log(`Master Router active on port :${PORT}`));
