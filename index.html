@@ -22,10 +22,55 @@
         .btn-sort { background: #607d8b; color: white; padding: 6px 12px; font-size: 11px; margin-left: 5px; }
         .btn-home { background: #f44336; color: white; font-size: 1.1em; margin: 20px auto; display: block; }
         .status-bar { background: rgba(0,0,0,0.5); padding: 12px; border-radius: 6px; margin-bottom: 20px; text-align: center; font-weight: bold; font-size: 1.1em; border: 1px solid #275d39; }
-        #main-stack-area { background: rgba(0,0,0,0.2); border-radius: 10px; padding: 15px; margin-bottom: 25px; width: 100%; box-sizing: border-box; }
-        .stack-row-container { display: flex; align-items: flex-start; justify-content: center; gap: 20px; }
-        .stack-history { display: flex; gap: 8px; }
+        
+        /* FIXED MOBILE OPTIMIZED STACK LAYOUT HOOKS */
+        #main-stack-area { 
+            background: rgba(0,0,0,0.2); 
+            border-radius: 10px; 
+            padding: 15px; 
+            margin-bottom: 25px; 
+            width: 100%; 
+            box-sizing: border-box; 
+            overflow: hidden;
+        }
+        .stack-row-container { 
+            display: flex; 
+            align-items: flex-start; 
+            justify-content: center; 
+            gap: 15px; 
+            width: 100%;
+        }
+        .stack-history { 
+            display: flex; 
+            gap: 8px; 
+            overflow-x: auto;
+            scroll-behavior: smooth;
+            max-width: calc(100% - var(--card-width) - 40px);
+            padding-bottom: 5px;
+        }
+        .stack-history::-webkit-scrollbar {
+            height: 4px;
+        }
+        .stack-history::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+        }
         .stack-history .card-wrapper { opacity: 0.5; transform: scale(0.85); }
+        
+        /* MOBILE VIEW BREAKPOINT OVERRIDES */
+        @media (max-width: 600px) {
+            .stack-row-container {
+                justify-content: space-between;
+                gap: 10px;
+            }
+            .stack-history {
+                flex-shrink: 1; 
+            }
+            .stack-history .card-wrapper:nth-last-child(n+4) {
+                display: none; /* Safely clean up long horizontal trails on narrow viewports */
+            }
+        }
+
         .card-wrapper { display: flex; flex-direction: column; align-items: center; }
         .card-owner-line { width: 100%; height: 3px; margin-top: 6px; position: relative; border-radius: 2px; }
         .card-owner-name { font-size: 11px; background: #143d22; padding: 0 4px; position: absolute; top: -7px; left: 50%; transform: translateX(-50%); white-space: nowrap; border-radius: 3px; font-weight: bold; }
@@ -101,7 +146,6 @@
 
 <script>
 const socket = io();
-let myId = null;
 let currentRoom = null;
 let selectedCards = [];
 let pendingJokerConvs = []; 
@@ -110,14 +154,13 @@ let draggedCardIdx = null;
 const VALUE_WEIGHTS = { 'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13, 'Joker':99 };
 const SUIT_WEIGHTS = { '♠':1, '♥':2, '♦':3, '♣':4, '🃏':99 };
 
-socket.on('roomCreated', (room) => { myId = socket.id; displayLobby(room); });
-socket.on('joinSuccess', ({ room, myId: sId }) => { myId = sId; displayLobby(room); });
+socket.on('roomCreated', (room) => { displayLobby(room); });
+socket.on('joinSuccess', ({ room }) => { displayLobby(room); });
 socket.on('roomUpdated', (room) => { displayLobby(room); });
 socket.on('gameStateSynced', (room) => { updateGameplayUI(room); });
 socket.on('errorMsg', (msg) => alert(msg));
 
 socket.on('gameStartedSignal', (room) => {
-    currentRoom = room;
     document.getElementById('menu-container').style.display = 'none';
     document.getElementById('game-container').style.display = 'block';
     updateGameplayUI(room);
@@ -125,7 +168,7 @@ socket.on('gameStartedSignal', (room) => {
 
 socket.on('promptAceSelectionNetwork', ({ room, playerId }) => {
     currentRoom = room;
-    if (playerId === myId) {
+    if (playerId === socket.id) {
         let row = document.createElement('div'); row.className = "modal-options";
         ['♠', '♥', '♦', '♣'].forEach(s => {
             let b = document.createElement('button'); b.style.fontSize = "24px"; b.innerText = s;
@@ -173,9 +216,9 @@ function displayLobby(room) {
     let amIHost = false;
     room.players.forEach(p => {
         let pDiv = document.createElement('div'); pDiv.style.color = p.color;
-        pDiv.innerText = `• ${p.name} ${p.id === myId ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
+        pDiv.innerText = `• ${p.name} ${p.id === socket.id ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
         listArea.appendChild(pDiv);
-        if(p.id === myId && p.isHost) amIHost = true;
+        if(p.id === socket.id && p.isHost) amIHost = true;
     });
     
     if (amIHost) {
@@ -210,7 +253,7 @@ function sayCardNetwork() {
 }
 
 function sortHandClient(type) {
-    const me = currentRoom.players.find(pl => pl.id === myId);
+    const me = currentRoom.players.find(pl => pl.id === socket.id);
     if (!me) return;
     me.hand.sort((a,b) => {
         if (type === 'SUIT') {
@@ -237,7 +280,8 @@ function setupDragDrop(cardDiv, cardIdx) {
     cardDiv.ondrop = (e) => {
         e.preventDefault();
         if(draggedCardIdx === null || draggedCardIdx === cardIdx) return;
-        const me = currentRoom.players.find(pl => pl.id === myId);
+        const me = currentRoom.players.find(pl => pl.id === socket.id);
+        if(!me) return;
         let moved = me.hand.splice(draggedCardIdx, 1)[0];
         me.hand.splice(cardIdx, 0, moved);
         draggedCardIdx = null; selectedCards = [];
@@ -302,7 +346,7 @@ function updateGameplayUI(room) {
     let area = document.getElementById('players-area'); area.innerHTML = '';
     room.players.forEach((p, pIdx) => {
         let isActive = (!room.isGameOver && pIdx === room.currentPlayerIdx);
-        let isMe = (p.id === myId);
+        let isMe = (p.id === socket.id);
         
         let sec = document.createElement('div'); sec.className = `player-section ${isActive ? 'active' : ''}`;
         let headRow = document.createElement('div'); headRow.className = 'player-header-row';
