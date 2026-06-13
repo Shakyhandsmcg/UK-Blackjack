@@ -19,11 +19,12 @@
         .btn-play { background: #4caf50; color: white; }
         .btn-draw { background: #2196f3; color: white; }
         .btn-card { background: #ff9800; color: white; }
+        /* PERSISTENT GLOBAL CALL BUTTON STYLE */
+        .btn-global-card { background: #ff9800; color: white; width: 100%; padding: 15px; font-size: 1.1em; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 1px; }
         .btn-sort { background: #607d8b; color: white; padding: 6px 12px; font-size: 11px; margin-left: 5px; }
         .btn-home { background: #f44336; color: white; font-size: 1.1em; margin: 20px auto; display: block; }
         .status-bar { background: rgba(0,0,0,0.5); padding: 12px; border-radius: 6px; margin-bottom: 20px; text-align: center; font-weight: bold; font-size: 1.1em; border: 1px solid #275d39; }
         
-        /* FIXED MOBILE OPTIMIZED STACK LAYOUT HOOKS */
         #main-stack-area { 
             background: rgba(0,0,0,0.2); 
             border-radius: 10px; 
@@ -48,27 +49,14 @@
             max-width: calc(100% - var(--card-width) - 40px);
             padding-bottom: 5px;
         }
-        .stack-history::-webkit-scrollbar {
-            height: 4px;
-        }
-        .stack-history::-webkit-scrollbar-thumb {
-            background: rgba(255,255,255,0.2);
-            border-radius: 2px;
-        }
+        .stack-history::-webkit-scrollbar { height: 4px; }
+        .stack-history::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
         .stack-history .card-wrapper { opacity: 0.5; transform: scale(0.85); }
         
-        /* MOBILE VIEW BREAKPOINT OVERRIDES */
         @media (max-width: 600px) {
-            .stack-row-container {
-                justify-content: space-between;
-                gap: 10px;
-            }
-            .stack-history {
-                flex-shrink: 1; 
-            }
-            .stack-history .card-wrapper:nth-last-child(n+4) {
-                display: none; /* Safely clean up long horizontal trails on narrow viewports */
-            }
+            .stack-row-container { justify-content: space-between; gap: 10px; }
+            .stack-history { flex-shrink: 1; }
+            .stack-history .card-wrapper:nth-last-child(n+4) { display: none; }
         }
 
         .card-wrapper { display: flex; flex-direction: column; align-items: center; }
@@ -87,6 +75,10 @@
 
         .player-section { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
         .player-section.active { border: 2px solid #4caf50; background: rgba(76, 175, 80, 0.12); }
+        /* TARGET HIGHLIGHT DESIGN FOR YOUR PERSONAL TOP ROW SECTION */
+        .player-section.my-personal-row { border: 2px dashed rgba(255, 235, 59, 0.4); background: rgba(255, 235, 59, 0.04); }
+        .player-section.my-personal-row.active { border: 2px solid #4caf50; background: rgba(76, 175, 80, 0.12); }
+        
         .player-header-row { display: flex; justify-content: space-between; align-items: center; }
         .hand { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; min-height: 140px; padding: 10px 0; }
         .controls { margin-top: 15px; display: flex; gap: 12px; }
@@ -128,13 +120,20 @@
 
 <div id="game-container">
     <div class="status-bar" id="status-text">Connecting to room engine...</div>
+    
+    <button id="global-say-card-btn" class="btn-global-card" onclick="sayCardNetwork()">Say 'Card'!</button>
+
+    <div id="my-personal-area"></div>
+
     <div id="main-stack-area">
         <div class="stack-row-container">
             <div class="stack-history" id="stack-history"></div>
             <div id="current-card-container"></div>
         </div>
     </div>
-    <div id="players-area"></div>
+    
+    <div id="opponents-area"></div>
+    
     <button id="back-to-home-btn" class="btn-home" style="display: none;" onclick="window.location.reload()">Exit Room</button>
 </div>
 
@@ -306,6 +305,7 @@ function toggleSelectClient(cardIdx, isJoker, alreadyConverted) {
     }
 }
 
+// --- RE-ENGINEERED TWO-ZONE RENDER ROUTINE ---
 function updateGameplayUI(room) {
     currentRoom = room;
     let currentTop = room.playedStack[room.playedStack.length - 1];
@@ -317,15 +317,16 @@ function updateGameplayUI(room) {
     document.getElementById('status-text').innerText = statusText;
     document.getElementById('back-to-home-btn').style.display = room.isGameOver ? 'block' : 'none';
 
+    // Toggle global call button style if game concludes
+    document.getElementById('global-say-card-btn').style.display = room.isGameOver ? 'none' : 'block';
+
     let hist = document.getElementById('stack-history'); hist.innerHTML = '';
     let start = Math.max(0, room.playedStack.length - 6);
     for(let i=start; i<room.playedStack.length-1; i++) {
         let cData = room.playedStack[i];
         let wrap = document.createElement('div'); wrap.className = 'card-wrapper';
-        
         let hasOverride = (i === room.playedStack.length - 2 && room.activeSuitOverride !== null);
         wrap.appendChild(renderCardGraphic(cData, i, true, false, hasOverride ? room.activeSuitOverride : null));
-        
         if (i === start || room.playedStack[i-1].playedBy !== cData.playedBy) {
             let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = cData.playerColor;
             let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = cData.playerColor; tag.innerText = cData.playedBy;
@@ -343,12 +344,17 @@ function updateGameplayUI(room) {
         ln.appendChild(tag); wrap.appendChild(ln); topCont.appendChild(wrap);
     }
 
-    let area = document.getElementById('players-area'); area.innerHTML = '';
+    // Clear output target buckets
+    let myArea = document.getElementById('my-personal-area'); myArea.innerHTML = '';
+    let oppArea = document.getElementById('opponents-area'); oppArea.innerHTML = '';
+
     room.players.forEach((p, pIdx) => {
         let isActive = (!room.isGameOver && pIdx === room.currentPlayerIdx);
         let isMe = (p.id === socket.id);
         
-        let sec = document.createElement('div'); sec.className = `player-section ${isActive ? 'active' : ''}`;
+        let sec = document.createElement('div'); 
+        sec.className = `player-section ${isActive ? 'active' : ''} ${isMe ? 'my-personal-row' : ''}`;
+        
         let headRow = document.createElement('div'); headRow.className = 'player-header-row';
         let h4 = document.createElement('h4'); h4.style.margin = '0'; h4.style.color = p.color;
         
@@ -378,10 +384,15 @@ function updateGameplayUI(room) {
             let ctrl = document.createElement('div'); ctrl.className = 'controls';
             let pBtn = document.createElement('button'); pBtn.className = 'btn-play'; pBtn.innerText = 'Play Selection'; pBtn.onclick = playSelectionNetwork;
             let dBtn = document.createElement('button'); dBtn.className = 'btn-draw'; dBtn.innerText = room.activePickupCount > 0 ? `Pick up (${room.activePickupCount})` : 'Draw / Pass'; dBtn.onclick = drawOrPassNetwork;
-            let cBtn = document.createElement('button'); cBtn.className = 'btn-card'; cBtn.innerText = "Say 'Card'"; cBtn.onclick = sayCardNetwork;
-            ctrl.appendChild(pBtn); ctrl.appendChild(dBtn); ctrl.appendChild(cBtn); sec.appendChild(ctrl);
+            ctrl.appendChild(pBtn); ctrl.appendChild(dBtn); sec.appendChild(ctrl);
         }
-        area.appendChild(sec);
+        
+        // FIX 2: Split placement delivery rules to separate output sections
+        if (isMe) {
+            myArea.appendChild(sec); // Anchored at the top!
+        } else {
+            oppArea.appendChild(sec); // Opponents render below the deck stack
+        }
     });
 }
 
