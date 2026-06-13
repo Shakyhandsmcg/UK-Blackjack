@@ -19,7 +19,6 @@
         .btn-play { background: #4caf50; color: white; }
         .btn-draw { background: #2196f3; color: white; }
         .btn-card { background: #ff9800; color: white; }
-        /* PERSISTENT GLOBAL CALL BUTTON STYLE */
         .btn-global-card { background: #ff9800; color: white; width: 100%; padding: 15px; font-size: 1.1em; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 1px; }
         .btn-sort { background: #607d8b; color: white; padding: 6px 12px; font-size: 11px; margin-left: 5px; }
         .btn-home { background: #f44336; color: white; font-size: 1.1em; margin: 20px auto; display: block; }
@@ -75,7 +74,6 @@
 
         .player-section { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
         .player-section.active { border: 2px solid #4caf50; background: rgba(76, 175, 80, 0.12); }
-        /* TARGET HIGHLIGHT DESIGN FOR YOUR PERSONAL TOP ROW SECTION */
         .player-section.my-personal-row { border: 2px dashed rgba(255, 235, 59, 0.4); background: rgba(255, 235, 59, 0.04); }
         .player-section.my-personal-row.active { border: 2px solid #4caf50; background: rgba(76, 175, 80, 0.12); }
         
@@ -123,14 +121,14 @@
     
     <button id="global-say-card-btn" class="btn-global-card" onclick="sayCardNetwork()">Say 'Card'!</button>
 
-    <div id="my-personal-area"></div>
-
     <div id="main-stack-area">
         <div class="stack-row-container">
             <div class="stack-history" id="stack-history"></div>
             <div id="current-card-container"></div>
         </div>
     </div>
+
+    <div id="my-personal-area"></div>
     
     <div id="opponents-area"></div>
     
@@ -305,7 +303,6 @@ function toggleSelectClient(cardIdx, isJoker, alreadyConverted) {
     }
 }
 
-// --- RE-ENGINEERED TWO-ZONE RENDER ROUTINE ---
 function updateGameplayUI(room) {
     currentRoom = room;
     let currentTop = room.playedStack[room.playedStack.length - 1];
@@ -316,8 +313,6 @@ function updateGameplayUI(room) {
     if (!room.isGameOver && room.activeSuitOverride) statusText += ` | Suit Called: ${room.activeSuitOverride}`;
     document.getElementById('status-text').innerText = statusText;
     document.getElementById('back-to-home-btn').style.display = room.isGameOver ? 'block' : 'none';
-
-    // Toggle global call button style if game concludes
     document.getElementById('global-say-card-btn').style.display = room.isGameOver ? 'none' : 'block';
 
     let hist = document.getElementById('stack-history'); hist.innerHTML = '';
@@ -344,7 +339,6 @@ function updateGameplayUI(room) {
         ln.appendChild(tag); wrap.appendChild(ln); topCont.appendChild(wrap);
     }
 
-    // Clear output target buckets
     let myArea = document.getElementById('my-personal-area'); myArea.innerHTML = '';
     let oppArea = document.getElementById('opponents-area'); oppArea.innerHTML = '';
 
@@ -387,11 +381,10 @@ function updateGameplayUI(room) {
             ctrl.appendChild(pBtn); ctrl.appendChild(dBtn); sec.appendChild(ctrl);
         }
         
-        // FIX 2: Split placement delivery rules to separate output sections
         if (isMe) {
-            myArea.appendChild(sec); // Anchored at the top!
+            myArea.appendChild(sec);
         } else {
-            oppArea.appendChild(sec); // Opponents render below the deck stack
+            oppArea.appendChild(sec);
         }
     });
 }
