@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UK Blackjack - Wireless Multi-Device</title>
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
         :root { --card-width: 85px; --card-height: 125px; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #143d22; color: white; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
@@ -15,6 +15,7 @@
         button { padding: 12px 24px; font-size: 14px; font-weight: bold; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
         .btn-blue { background: #2196f3; color: white; width: 100%; margin-top: 10px; }
         .btn-green { background: #4caf50; color: white; width: 100%; margin-top: 10px; }
+        .btn-orange { background: #ff9800; color: white; width: 100%; margin-top: 10px; }
         .btn-play { background: #4caf50; color: white; }
         .btn-draw { background: #2196f3; color: white; }
         .btn-card { background: #ff9800; color: white; }
@@ -70,6 +71,7 @@
         <p style="color: #ffeb3b; font-size: 1.4em;">ROOM CODE: <span id="display-room-code">----</span></p>
         <p>Players in Lobby (<span id="lobby-count">0</span>/<span id="lobby-max">0</span>):</p>
         <div id="lobby-player-list" style="margin: 15px 0; text-align: left; padding-left: 30px;"></div>
+        <button id="add-ai-btn" class="btn-orange" style="display:none;" onclick="addBotToLobby()">Add AI Bot</button>
         <button id="start-game-lobby-btn" class="btn-green" style="display:none;" onclick="launchGame()">Launch Game</button>
     </div>
 </div>
@@ -144,6 +146,10 @@ function joinRoom() {
     socket.emit('joinRoom', { name, roomCode: code });
 }
 
+function addBotToLobby() {
+    socket.emit('addBotServer', { roomCode: currentRoom.code });
+}
+
 function launchGame() {
     socket.emit('startGameServer', { roomCode: currentRoom.code });
 }
@@ -161,11 +167,18 @@ function displayLobby(room) {
     let amIHost = false;
     room.players.forEach(p => {
         let pDiv = document.createElement('div'); pDiv.style.color = p.color;
-        pDiv.innerText = `• ${p.name} ${p.id === myId ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''}`;
+        pDiv.innerText = `• ${p.name} ${p.id === myId ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
         listArea.appendChild(pDiv);
         if(p.id === myId && p.isHost) amIHost = true;
     });
-    document.getElementById('start-game-lobby-btn').style.display = (amIHost && room.players.length >= 2) ? 'block' : 'none';
+    
+    if (amIHost) {
+        document.getElementById('add-ai-btn').style.display = (room.players.length < room.maxPlayers) ? 'block' : 'none';
+        document.getElementById('start-game-lobby-btn').style.display = (room.players.length >= 2) ? 'block' : 'none';
+    } else {
+        document.getElementById('add-ai-btn').style.display = 'none';
+        document.getElementById('start-game-lobby-btn').style.display = 'none';
+    }
 }
 
 function playSelectionNetwork() {
@@ -289,7 +302,7 @@ function updateGameplayUI(room) {
         h4.innerText = `${p.name} (${p.hand.length} Cards)${addon}`;
         headRow.appendChild(h4);
 
-        if (isActive && isMe && !p.out) {
+        if (isActive && isMe && !p.out && !p.isAI) {
             let sBox = document.createElement('div');
             let bS = document.createElement('button'); bS.className = 'btn-sort'; bS.innerText = 'Sort Suit'; bS.onclick = () => sortHandClient('SUIT');
             let bN = document.createElement('button'); bN.className = 'btn-sort'; bN.innerText = 'Sort Number'; bN.onclick = () => sortHandClient('NUMBER');
@@ -299,13 +312,13 @@ function updateGameplayUI(room) {
 
         let handDiv = document.createElement('div'); handDiv.className = 'hand';
         p.hand.forEach((card, cIdx) => {
-            let revealFace = isMe && !p.out;
-            let clickable = isActive && isMe && !p.out;
+            let revealFace = isMe && !p.out && !p.isAI;
+            let clickable = isActive && isMe && !p.out && !p.isAI;
             handDiv.appendChild(renderCardGraphic(card, cIdx, revealFace, clickable));
         });
         sec.appendChild(handDiv);
 
-        if (isActive && isMe && !p.out) {
+        if (isActive && isMe && !p.out && !p.isAI) {
             let ctrl = document.createElement('div'); ctrl.className = 'controls';
             let pBtn = document.createElement('button'); pBtn.className = 'btn-play'; pBtn.innerText = 'Play Selection'; pBtn.onclick = playSelectionNetwork;
             let dBtn = document.createElement('button'); dBtn.className = 'btn-draw'; dBtn.innerText = room.activePickupCount > 0 ? `Pick up (${room.activePickupCount})` : 'Draw / Pass'; dBtn.onclick = drawOrPassNetwork;
@@ -342,6 +355,7 @@ function renderCardGraphic(card, index, showFace, interactive) {
     return div;
 }
 
+// Fixed missing variable scope reference error hook inside popup transforms
 function promptJokerModal(cardIdx) {
     let container = document.createElement('div'); container.style.display = 'flex'; container.style.flexDirection = 'column'; container.style.gap = '10px';
     let sPara = document.createElement('p'); sPara.innerText = "1. Pick Suit:"; container.appendChild(sPara);
