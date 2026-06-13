@@ -58,6 +58,12 @@ function permute(arr) {
     return res;
 }
 
+function isPickupCard(card) {
+    if (card.displayValue === '2') return true;
+    if (card.displayValue === 'J' && (card.displaySuit === '♠' || card.displaySuit === '♣')) return true;
+    return false;
+}
+
 function isValidStep(card, activeVal, activeSuit, suitOverride, isFirstCard) {
     if (isFirstCard && card.displayValue === 'A') return true;
     if (card.displayValue === activeVal) return true;
@@ -142,7 +148,6 @@ io.on('connection', (socket) => {
         socket.emit('joinSuccess', { room, myId: socket.id });
     });
 
-    // SERVER BOT SPINNER INJECTION
     socket.on('addBotServer', ({ roomCode }) => {
         const room = rooms[roomCode];
         if (!room || room.players.length >= room.maxPlayers) return;
@@ -270,7 +275,6 @@ function executeChainActions(room, chain, player) {
     if (lastPlayed.displayValue === 'A' && !player.isAI) {
         io.to(room.code).emit('promptAceSelectionNetwork', { room, playerId: player.id });
     } else if (lastPlayed.displayValue === 'A' && player.isAI) {
-        // AI Ace suit picker context selector
         let counts = { '♠':0, '♥':0, '♦':0, '♣':0 };
         player.hand.forEach(c => { if(counts[c.displaySuit] !== undefined) counts[c.displaySuit]++; });
         let best = '♠'; for(let s in counts) { if(counts[s] > counts[best]) best = s; }
@@ -334,7 +338,6 @@ function completeTurnPassing(room) {
     checkAndExecuteBotTurn(room);
 }
 
-// --- CORE CLOUD BOT ROUTING EXECUTION ENGINE ---
 function checkAndExecuteBotTurn(room) {
     if (room.isGameOver) return;
     let currentMover = room.players[room.currentPlayerIdx];
@@ -345,18 +348,17 @@ function checkAndExecuteBotTurn(room) {
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
 
-        // Auto-configure Jokers for the bot if helpful
         currentMover.hand.forEach(c => {
             if (c.isJoker) { c.displaySuit = activeSuit; c.displayValue = activeVal === 'Joker' ? '7' : activeVal; }
         });
 
-        // AI Rule: Check for penalty stack defense
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => isPickupCard(c) || (c.displayValue === 'J' && ['♥','♦'].includes(c.displaySuit)));
             if (defenseIdx > -1) {
                 let card = currentMover.hand[defenseIdx];
-                if (currentMover.hand.length === 2) currentMover.saidCard = true; // Auto-say 'Card'
-                p.hand.splice(defenseIdx, 1);
+                if (currentMover.hand.length === 2) currentMover.saidCard = true;
+                // CRITICAL FIX: Swap p.hand out for the scoped currentMover instance array
+                currentMover.hand.splice(defenseIdx, 1);
                 executeChainActions(room, [card], currentMover);
             } else {
                 executeDrawAction(room, currentMover);
@@ -364,7 +366,6 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        // Standard Bot play scanning engine loops
         let workingSingleCard = null;
         for (let i = 0; i < currentMover.hand.length; i++) {
             let card = currentMover.hand[i];
@@ -379,5 +380,5 @@ function checkAndExecuteBotTurn(room) {
         } else {
             executeDrawAction(room, currentMover);
         }
-    }, 3000); // 3-second delay so you can watch bots think and react
+    }, 3000); 
 }
