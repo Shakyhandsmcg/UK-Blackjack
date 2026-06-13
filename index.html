@@ -38,7 +38,6 @@
         .card-watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 12px; font-weight: bold; pointer-events: none; text-align: center; white-space: nowrap; }
         .joker-watermark { color: #7b1fa2; border: 1px dashed #7b1fa2; padding: 2px 4px; border-radius: 4px; background: rgba(255,255,255,0.8); }
         .ace-ghost-watermark { font-size: 32px; color: rgba(0, 0, 0, 0.12); font-weight: normal; }
-        /* NEW STYLING: Faded watermark container specifically for transformed morphing jokers */
         .joker-ghost-watermark { font-size: 11px; font-weight: bold; color: rgba(123, 31, 162, 0.18); border: 1px dashed rgba(123, 31, 162, 0.25); padding: 1px 3px; border-radius: 4px; }
 
         .player-section { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
@@ -111,6 +110,7 @@ let draggedCardIdx = null;
 const VALUE_WEIGHTS = { 'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13, 'Joker':99 };
 const SUIT_WEIGHTS = { '♠':1, '♥':2, '♦':3, '♣':4, '🃏':99 };
 
+// FRONTEND FIX: Secure that myId locks instantly inside room configurations handshakes
 socket.on('roomCreated', (room) => { myId = socket.id; displayLobby(room); });
 socket.on('joinSuccess', ({ room, myId: sId }) => { myId = sId; displayLobby(room); });
 socket.on('roomUpdated', (room) => { displayLobby(room); });
@@ -173,9 +173,9 @@ function displayLobby(room) {
     let amIHost = false;
     room.players.forEach(p => {
         let pDiv = document.createElement('div'); pDiv.style.color = p.color;
-        pDiv.innerText = `• ${p.name} ${p.id === myId ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
+        pDiv.innerText = `• ${p.name} ${(p.id === myId || p.id === socket.id) ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
         listArea.appendChild(pDiv);
-        if(p.id === myId && p.isHost) amIHost = true;
+        if((p.id === myId || p.id === socket.id) && p.isHost) amIHost = true;
     });
     
     if (amIHost) {
@@ -205,17 +205,8 @@ function drawOrPassNetwork() {
     selectedCards = []; pendingJokerConvs = [];
 }
 
-// Fixed selection mutation indexing for safety mappings
-function findClientCardActualIndex(targetIndex) {
-    let pendingConv = pendingJokerConvs.find(c => c.index === targetIndex);
-    if (pendingConv) return pendingConv;
-    const me = currentRoom.players.find(pl => pl.id === myId);
-    if (me && me.hand[targetIndex]) return me.hand[targetIndex];
-    return null;
-}
-
 function sortHandClient(type) {
-    const me = currentRoom.players.find(pl => pl.id === myId);
+    const me = currentRoom.players.find(pl => pl.id === myId || pl.id === socket.id);
     if (!me) return;
     me.hand.sort((a,b) => {
         if (type === 'SUIT') {
@@ -242,7 +233,7 @@ function setupDragDrop(cardDiv, cardIdx) {
     cardDiv.ondrop = (e) => {
         e.preventDefault();
         if(draggedCardIdx === null || draggedCardIdx === cardIdx) return;
-        const me = currentRoom.players.find(pl => pl.id === myId);
+        const me = currentRoom.players.find(pl => pl.id === myId || pl.id === socket.id);
         let moved = me.hand.splice(draggedCardIdx, 1)[0];
         me.hand.splice(cardIdx, 0, moved);
         draggedCardIdx = null; selectedCards = [];
@@ -255,7 +246,6 @@ function toggleSelectClient(cardIdx, isJoker, alreadyConverted) {
     if (exist > -1) {
         selectedCards.splice(exist, 1);
         selectedCards.forEach((s, idx) => s.order = idx + 1);
-        // Clear configuration tracking lines if deselected
         pendingJokerConvs = pendingJokerConvs.filter(c => c.index !== cardIdx);
         updateGameplayUI(currentRoom);
     } else {
@@ -308,7 +298,7 @@ function updateGameplayUI(room) {
     let area = document.getElementById('players-area'); area.innerHTML = '';
     room.players.forEach((p, pIdx) => {
         let isActive = (!room.isGameOver && pIdx === room.currentPlayerIdx);
-        let isMe = (p.id === myId);
+        let isMe = (p.id === myId || p.id === socket.id);
         
         let sec = document.createElement('div'); sec.className = `player-section ${isActive ? 'active' : ''}`;
         let headRow = document.createElement('div'); headRow.className = 'player-header-row';
@@ -349,14 +339,12 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
     let div = document.createElement('div');
     if (!showFace) { div.className = 'card hidden-face'; return div; }
 
-    // Read dynamic layout runtime properties to adjust transformations
     let isOriginallyJoker = (card.isJoker === true || card.value === 'Joker');
     let localJokerConfig = pendingJokerConvs.find(c => c.index === index);
 
     let finalValue = card.displayValue;
     let finalSuit = card.displaySuit;
 
-    // Apply clientside runtime modifications if selected locally
     if (interactive && isOriginallyJoker && localJokerConfig) {
         finalValue = localJokerConfig.value;
         finalSuit = localJokerConfig.suit;
@@ -377,13 +365,10 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
 
     let top = document.createElement('div'); top.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); div.appendChild(top);
     
-    // MIDDLE WATERMARK DESIGN INJECTOR Engine
     if (isOriginallyJoker) {
         if (finalValue === 'Joker') {
-            // Unconverted Joker Design Template
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
         } else {
-            // NEW DESIGN: Converted Joker morph overlay template layer
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-ghost-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
         }
     } else if (card.displayValue === 'A' && activeSuitOverride !== null) {
