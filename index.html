@@ -204,6 +204,7 @@ function drawOrPassNetwork() {
 }
 
 function sortHandClient(type) {
+    if (!socket.id) return;
     const me = currentRoom.players.find(pl => pl.id === socket.id);
     if (!me) return;
     me.hand.sort((a,b) => {
@@ -230,8 +231,9 @@ function setupDragDrop(cardDiv, cardIdx) {
     cardDiv.ondragover = (e) => e.preventDefault();
     cardDiv.ondrop = (e) => {
         e.preventDefault();
-        if(draggedCardIdx === null || draggedCardIdx === cardIdx) return;
+        if(draggedCardIdx === null || draggedCardIdx === cardIdx || !socket.id) return;
         const me = currentRoom.players.find(pl => pl.id === socket.id);
+        if(!me) return;
         let moved = me.hand.splice(draggedCardIdx, 1)[0];
         me.hand.splice(cardIdx, 0, moved);
         draggedCardIdx = null; selectedCards = [];
@@ -296,7 +298,7 @@ function updateGameplayUI(room) {
     let area = document.getElementById('players-area'); area.innerHTML = '';
     room.players.forEach((p, pIdx) => {
         let isActive = (!room.isGameOver && pIdx === room.currentPlayerIdx);
-        let isMe = (p.id === socket.id);
+        let isMe = (socket.id && p.id === socket.id);
         
         let sec = document.createElement('div'); sec.className = `player-section ${isActive ? 'active' : ''}`;
         let headRow = document.createElement('div'); headRow.className = 'player-header-row';
@@ -315,11 +317,15 @@ function updateGameplayUI(room) {
         sec.appendChild(headRow);
 
         let handDiv = document.createElement('div'); handDiv.className = 'hand';
-        p.hand.forEach((card, cIdx) => {
-            let revealFace = isMe && !p.out && !p.isAI;
-            let clickable = isActive && isMe && !p.out && !p.isAI;
-            handDiv.appendChild(renderCardGraphic(card, cIdx, revealFace, clickable, null));
-        });
+        
+        // CRITICAL GHOST GUARD CLAUSE: Ensure p.hand array is fully initialized before looping templates
+        if (p.hand && Array.isArray(p.hand)) {
+            p.hand.forEach((card, cIdx) => {
+                let revealFace = isMe && !p.out && !p.isAI;
+                let clickable = isActive && isMe && !p.out && !p.isAI;
+                handDiv.appendChild(renderCardGraphic(card, cIdx, revealFace, clickable, null));
+            });
+        }
         sec.appendChild(handDiv);
 
         if (isActive && isMe && !p.out && !p.isAI) {
