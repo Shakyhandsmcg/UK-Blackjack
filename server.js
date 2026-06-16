@@ -109,12 +109,34 @@ function getValidPermutation(cards, room) {
 }
 
 io.on('connection', (socket) => {
-    socket.on('createRoom', ({ hostName, maxPlayers }) => {
+
+    // RECONNECTION BRIDGE HANDSHAKE
+    socket.on('attemptSessionRecovery', ({ token, roomCode }) => {
+        if (!roomCode || !token) return;
+        const code = roomCode.toUpperCase().trim();
+        const room = rooms[code];
+        if (!room) return;
+
+        const p = room.players.find(pl => pl.sessionToken === token);
+        if (p) {
+            p.id = socket.id; // Hot-swap old dropped socket ID with new one
+            socket.join(code);
+            socket.emit('sessionRecoverySuccess', { room, myId: socket.id });
+            io.to(code).emit('gameStateSynced', room);
+        }
+    });
+
+    socket.on('createRoom', ({ hostName, maxPlayers, token }) => {
         const roomCode = generateRoomCode();
         rooms[roomCode] = {
             code: roomCode,
             maxPlayers: parseInt(maxPlayers),
-            players: [{ id: socket.id, name: hostName, hand: [], saidCard: false, out: false, rank: null, color: '#ffeb3b', isHost: true, isAI: false, finishedOnPickup: false }],
+            players: [{ 
+                id: socket.id, sessionToken: token, name: hostName, hand: [], 
+                saidCard: false, out: false, rank: null, color: '#ffeb3b', 
+                isHost: true, isAI: false, finishedOnPickup: false,
+                scores: { first: 0, second: 0, third: 0, fourth: 0 }
+            }],
             deck: [],
             playedStack: [],
             activePickupCount: 0,
@@ -129,17 +151,32 @@ io.on('connection', (socket) => {
         socket.emit('roomCreated', rooms[roomCode]);
     });
 
-    socket.on('joinRoom', ({ name, roomCode }) => {
+    socket.on('joinRoom', ({ name, roomCode, token }) => {
         const code = roomCode.toUpperCase().trim();
         const room = rooms[code];
         if (!room) return socket.emit('errorMsg', 'Room not found!');
+        
+        // Handle pre-existing user refreshing browser during layout configuration
+        const existingPlayer = room.players.find(pl => pl.sessionToken === token);
+        if (existingPlayer) {
+            existingPlayer.id = socket.id;
+            socket.join(code);
+            io.to(code).emit('roomUpdated', room);
+            return socket.emit('joinSuccess', { room, myId: socket.id });
+        }
+
         if (room.gameStarted) return socket.emit('errorMsg', 'Game already started!');
         if (room.players.length >= room.maxPlayers) return socket.emit('errorMsg', 'Room full!');
 
         const colors = ["#ffeb3b", "#00e5ff", "#ff4081", "#ff9100"];
         const playerColor = colors[room.players.length] || "#ffffff";
 
-        room.players.push({ id: socket.id, name, hand: [], saidCard: false, out: false, rank: null, color: playerColor, isHost: false, isAI: false, finishedOnPickup: false });
+        room.players.push({ 
+            id: socket.id, sessionToken: token, name, hand: [], 
+            saidCard: false, out: false, rank: null, color: playerColor, 
+            isHost: false, isAI: false, finishedOnPickup: false,
+            scores: { first: 0, second: 0, third: 0, fourth: 0 }
+        });
         socket.join(code);
         io.to(code).emit('roomUpdated', room);
         socket.emit('joinSuccess', { room, myId: socket.id });
@@ -155,8 +192,10 @@ io.on('connection', (socket) => {
 
         room.players.push({
             id: `bot-${Math.random().toString(36).substr(2, 5)}`,
+            sessionToken: `bot-tok-${Math.random()}`,
             name: `CPU Bot ${botIndex}`,
-            hand: [], saidCard: false, out: false, rank: null, color: botColor, isHost: false, isAI: true, finishedOnPickup: false
+            hand: [], saidCard: false, out: false, rank: null, color: botColor, isHost: false, isAI: true, finishedOnPickup: false,
+            scores: { first: 0, second: 0, third: 0, fourth: 0 }
         });
         io.to(roomCode).emit('roomUpdated', room);
     });
@@ -164,25 +203,13 @@ io.on('connection', (socket) => {
     socket.on('startGameServer', ({ roomCode }) => {
         const room = rooms[roomCode];
         if (!room || room.gameStarted) return;
+        initializeRound(room);
+    });
 
-        room.gameStarted = true;
-        room.deck = createFreshDeck();
-        shuffle(room.deck);
-
-        room.players.forEach(p => {
-            p.hand = []; p.saidCard = false; p.out = false; p.rank = null; p.finishedOnPickup = false;
-            for(let i=0; i<7; i++) p.hand.push(room.deck.pop());
-        });
-
-        let startCard = room.deck.pop();
-        while(startCard.isJoker || ['A','2','8','J','Q','K'].includes(startCard.value)) {
-            room.deck.unshift(startCard); shuffle(room.deck); startCard = room.deck.pop();
-        }
-        startCard.playedBy = "Dealer"; startCard.playerColor = "#aaaaaa";
-        room.playedStack.push(startCard);
-
-        io.to(roomCode).emit('gameStartedSignal', room);
-        checkAndExecuteBotTurn(room);
+    socket.on('requestRematchServer', ({ roomCode }) => {
+        const room = rooms[roomCode];
+        if (!room || !room.isGameOver) return;
+        initializeRound(room);
     });
 
     socket.on('playCards', ({ roomCode, cardIndices, jokerConfigurations }) => {
@@ -239,14 +266,51 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
+        // Retain configuration memory to allow re-connection processing loops
         for (let code in rooms) {
             const room = rooms[code];
-            room.players = room.players.filter(p => p.id !== socket.id);
-            if (room.players.length === 0 || room.players.every(p => p.isAI)) delete rooms[code];
-            else io.to(code).emit('gameStateSynced', room);
+            const p = room.players.find(pl => pl.id === socket.id);
+            if (p) {
+                // If the game hasn't launched yet, clean them out safely
+                if (!room.gameStarted) {
+                    room.players = room.players.filter(pl => pl.id !== socket.id);
+                    if (room.players.length === 0 || room.players.every(pl => pl.isAI)) delete rooms[code];
+                    else io.to(code).emit('roomUpdated', room);
+                } else {
+                    // Let them hang in a disconnected status, keeping their hand preserved
+                    io.to(code).emit('gameStateSynced', room);
+                }
+            }
         }
     });
 });
+
+function initializeRound(room) {
+    room.gameStarted = true;
+    room.isGameOver = false;
+    room.deck = createFreshDeck();
+    shuffle(room.deck);
+    room.finishPodiumOrder = [];
+    room.activePickupCount = 0;
+    room.currentPlayerIdx = 0;
+    room.turnDirection = 1;
+    room.activeSuitOverride = null;
+
+    room.players.forEach(p => {
+        p.hand = []; p.saidCard = false; p.out = false; p.rank = null; p.finishedOnPickup = false;
+        for(let i=0; i<7; i++) p.hand.push(room.deck.pop());
+    });
+
+    let startCard = room.deck.pop();
+    while(startCard.isJoker || ['A','2','8','J','Q','K'].includes(startCard.value)) {
+        room.deck.unshift(startCard); shuffle(room.deck); startCard = room.deck.pop();
+    }
+    startCard.playedBy = "Dealer"; startCard.playerColor = "#aaaaaa";
+    room.playedStack = [startCard];
+
+    io.to(room.code).emit('gameStartedSignal', room);
+    checkAndExecuteBotTurn(room);
+}
 
 function executeChainActions(room, chain, player) {
     let lastPlayed = null;
@@ -270,7 +334,12 @@ function executeChainActions(room, chain, player) {
             room.finishPodiumOrder.push(player.id);
             player.rank = room.finishPodiumOrder.length;
             
-            // TOOURNAMENT RULE TRACKING: Mark if they went out on an active attacking penalty card
+            // Assign score point to active session row tracker variables
+            if (player.rank === 1) player.scores.first++;
+            else if (player.rank === 2) player.scores.second++;
+            else if (player.rank === 3) player.scores.third++;
+            else if (player.rank === 4) player.scores.fourth++;
+
             if (lastPlayed && (lastPlayed.displayValue === '2' || (lastPlayed.displayValue === 'J' && ['♠','♣'].includes(lastPlayed.displaySuit)))) {
                 player.finishedOnPickup = true;
             } else {
@@ -279,9 +348,9 @@ function executeChainActions(room, chain, player) {
         }
     }
 
-    if (lastPlayed.displayValue === 'A' && !player.isAI) {
+    if (lastPlayed && lastPlayed.displayValue === 'A' && !player.isAI) {
         io.to(room.code).emit('promptAceSelectionNetwork', { room, playerId: player.id });
-    } else if (lastPlayed.displayValue === 'A' && player.isAI) {
+    } else if (lastPlayed && lastPlayed.displayValue === 'A' && player.isAI) {
         let counts = { '♠':0, '♥':0, '♦':0, '♣':0 };
         player.hand.forEach(c => { if(counts[c.displaySuit] !== undefined) counts[c.displaySuit]++; });
         let best = '♠'; for(let s in counts) { if(counts[s] > counts[best]) best = s; }
@@ -296,8 +365,6 @@ function executeDrawAction(room, player) {
     let count = room.activePickupCount > 0 ? room.activePickupCount : 1;
     drawCards(room, player, count);
     
-    // TOOURNAMENT RULE SAFETY VALVE: Since this player absorbed/paid the penalty,
-    // clear all "Bring Back" flags across the room. The threat is dead!
     if (room.activePickupCount > 0) {
         room.players.forEach(p => p.finishedOnPickup = false);
     }
@@ -323,13 +390,21 @@ function advanceTurn(room) {
     room.currentPlayerIdx = (room.currentPlayerIdx + room.turnDirection + room.players.length) % room.players.length;
 }
 
-// --- RE-ENGINEERED TOURNAMENT TURN BRING-BACK CORE ---
 function completeTurnPassing(room) {
     let activeCount = room.players.filter(pl => !pl.out).length;
     
     if (activeCount <= 1) {
         let lastPlayer = room.players.find(pl => !pl.out);
-        if (lastPlayer) { room.finishPodiumOrder.push(lastPlayer.id); lastPlayer.rank = room.finishPodiumOrder.length; lastPlayer.out = true; }
+        if (lastPlayer) { 
+            room.finishPodiumOrder.push(lastPlayer.id); 
+            lastPlayer.rank = room.finishPodiumOrder.length; 
+            lastPlayer.out = true; 
+            
+            if (lastPlayer.rank === 1) lastPlayer.scores.first++;
+            else if (lastPlayer.rank === 2) lastPlayer.scores.second++;
+            else if (lastPlayer.rank === 3) lastPlayer.scores.third++;
+            else if (lastPlayer.rank === 4) lastPlayer.scores.fourth++;
+        }
         room.isGameOver = true; io.to(room.code).emit('gameStateSynced', room); return;
     }
 
@@ -343,15 +418,19 @@ function completeTurnPassing(room) {
     while (loops < room.players.length) {
         let target = room.players[room.currentPlayerIdx];
         
-        // Dynamic Bring Back Validator Block
         if (target.out) {
-            // CRITICAL CHECK: Only pull an 'out' player back if they finished on an attack card AND the penalty survived the loop back to them
             if (room.activePickupCount > 0 && target.finishedOnPickup === true) {
                 target.out = false; 
-                target.rank = null;
-                target.finishedOnPickup = false; // Reset the flag once triggered
                 
-                // Re-align leaderboard tracking indices
+                // Deduct their scoring win because they are pulled back into play
+                if (target.rank === 1) target.scores.first--;
+                else if (target.rank === 2) target.scores.second--;
+                else if (target.rank === 3) target.scores.third--;
+                else if (target.rank === 4) target.scores.fourth--;
+
+                target.rank = null;
+                target.finishedOnPickup = false;
+                
                 room.finishPodiumOrder = room.finishPodiumOrder.filter(id => id !== target.id);
                 room.players.forEach(pl => { if(pl.out && pl.rank !== null) pl.rank = room.finishPodiumOrder.indexOf(pl.id) + 1; });
                 
