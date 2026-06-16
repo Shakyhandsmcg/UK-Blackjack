@@ -1,0 +1,16 @@
+{
+  "name": "UK Blackjack Online",
+  "short_name": "Blackjack",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#143d22",
+  "theme_color": "#143d22",
+  "icons": [
+    {
+      "src": "Blackjackicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
