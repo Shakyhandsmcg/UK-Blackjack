@@ -75,6 +75,7 @@ function isValidStep(card, activeVal, activeSuit, suitOverride, isFirstCard) {
 }
 
 function getValidPermutation(cards, room) {
+    if (room.playedStack.length === 0) return false;
     let currentTop = room.playedStack[room.playedStack.length - 1];
     let initialSuit = currentTop.displaySuit;
     let initialVal = currentTop.displayValue;
@@ -156,7 +157,6 @@ io.on('connection', (socket) => {
         const room = rooms[code];
         if (!room) return socket.emit('errorMsg', 'Room not found!');
         
-        // Handle pre-existing user refreshing browser during layout configuration
         const existingPlayer = room.players.find(pl => pl.sessionToken === token);
         if (existingPlayer) {
             existingPlayer.id = socket.id;
@@ -233,6 +233,8 @@ io.on('connection', (socket) => {
         if (!workingOrderChain) return socket.emit('errorMsg', 'Broken sequence link.');
         
         p.hand = p.hand.filter((_, idx) => !cardIndices.includes(idx));
+        
+        // Clear active overrides on explicit player card drops
         room.activeSuitOverride = null;
         executeChainActions(room, workingOrderChain, p);
     });
@@ -266,18 +268,15 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        // Retain configuration memory to allow re-connection processing loops
         for (let code in rooms) {
             const room = rooms[code];
             const p = room.players.find(pl => pl.id === socket.id);
             if (p) {
-                // If the game hasn't launched yet, clean them out safely
                 if (!room.gameStarted) {
                     room.players = room.players.filter(pl => pl.id !== socket.id);
                     if (room.players.length === 0 || room.players.every(pl => pl.isAI)) delete rooms[code];
                     else io.to(code).emit('roomUpdated', room);
                 } else {
-                    // Let them hang in a disconnected status, keeping their hand preserved
                     io.to(code).emit('gameStateSynced', room);
                 }
             }
@@ -334,7 +333,6 @@ function executeChainActions(room, chain, player) {
             room.finishPodiumOrder.push(player.id);
             player.rank = room.finishPodiumOrder.length;
             
-            // Assign score point to active session row tracker variables
             if (player.rank === 1) player.scores.first++;
             else if (player.rank === 2) player.scores.second++;
             else if (player.rank === 3) player.scores.third++;
@@ -377,12 +375,21 @@ function executeDrawAction(room, player) {
 function drawCards(room, player, count) {
     for (let i = 0; i < count; i++) {
         if (room.deck.length === 0) {
-            if (room.playedStack.length <= 1) break;
-            let top = room.playedStack.pop(); room.deck = [...room.playedStack];
-            room.deck.forEach(c => { if(c.isJoker) { c.displayValue = '🃏'; c.displaySuit = '🃏'; } });
-            shuffle(room.deck); room.playedStack = [top];
+            // Infinite Deck Recycling fix: if playedStack runs low, manufacture a fresh baseline card
+            if (room.playedStack.length <= 1) {
+                let freshDeckFallback = createFreshDeck();
+                shuffle(freshDeckFallback);
+                room.deck = freshDeckFallback;
+            } else {
+                let top = room.playedStack.pop(); 
+                room.deck = [...room.playedStack];
+                room.deck.forEach(c => { if(c.isJoker) { c.displayValue = '🃏'; c.displaySuit = '🃏'; } });
+                shuffle(room.deck); 
+                room.playedStack = [top];
+            }
         }
-        player.hand.push(room.deck.pop());
+        let drawnCard = room.deck.pop();
+        if (drawnCard) player.hand.push(drawnCard);
     }
 }
 
@@ -422,7 +429,6 @@ function completeTurnPassing(room) {
             if (room.activePickupCount > 0 && target.finishedOnPickup === true) {
                 target.out = false; 
                 
-                // Deduct their scoring win because they are pulled back into play
                 if (target.rank === 1) target.scores.first--;
                 else if (target.rank === 2) target.scores.second--;
                 else if (target.rank === 3) target.scores.third--;
@@ -454,6 +460,7 @@ function checkAndExecuteBotTurn(room) {
     if (!currentMover || !currentMover.isAI || currentMover.out) return;
 
     setTimeout(() => {
+        if (room.isGameOver) return; // Defensive sanity check
         let currentTop = room.playedStack[room.playedStack.length - 1];
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
@@ -466,8 +473,12 @@ function checkAndExecuteBotTurn(room) {
             let defenseIdx = currentMover.hand.findIndex(c => isPickupCard(c) || (c.displayValue === 'J' && ['♥','♦'].includes(c.displaySuit)));
             if (defenseIdx > -1) {
                 let card = currentMover.hand[defenseIdx];
+                
+                // Track announcement status after splice calculation safely
                 if (currentMover.hand.length === 2) currentMover.saidCard = true;
+                
                 currentMover.hand.splice(defenseIdx, 1);
+                room.activeSuitOverride = null; // Clear override flag
                 executeChainActions(room, [card], currentMover);
             } else {
                 executeDrawAction(room, currentMover);
@@ -485,6 +496,7 @@ function checkAndExecuteBotTurn(room) {
         if (workingSingleCard) {
             if (currentMover.hand.length === 2) currentMover.saidCard = true;
             currentMover.hand = currentMover.hand.filter(c => c !== workingSingleCard);
+            room.activeSuitOverride = null; // Clear override flag
             executeChainActions(room, [workingSingleCard], currentMover);
         } else {
             executeDrawAction(room, currentMover);
