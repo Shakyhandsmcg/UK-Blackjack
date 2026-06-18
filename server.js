@@ -16,7 +16,6 @@ const rooms = {};
 const SUITS = ['♠', '♥', '♦', '♣'];
 const VALUES = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
-// Memory footprint tracking handling background timeout handles
 const botTimeouts = {};
 
 function generateRoomCode() {
@@ -30,11 +29,11 @@ function createFreshDeck() {
     let deck = [];
     for (let suit of SUITS) {
         for (let value of VALUES) {
-            deck.push({ suit, value, isJoker: false, displayValue: value, displaySuit: suit, playedBy: "System", playerColor: "#aaa" });
+            deck.push({ suit, value, isJoker: false, displayValue: value, displaySuit: suit, originalSuit: suit, playedBy: "System", playerColor: "#aaa" });
         }
     }
-    deck.push({ suit: 'Joker', value: 'Joker', isJoker: true, displayValue: '🃏', displaySuit: '🃏', playedBy: "System", playerColor: "#aaa" });
-    deck.push({ suit: 'Joker', value: 'Joker', isJoker: true, displayValue: '🃏', displaySuit: '🃏', playedBy: "System", playerColor: "#aaa" });
+    deck.push({ suit: 'Joker', value: 'Joker', isJoker: true, displayValue: '🃏', displaySuit: '🃏', originalSuit: 'Joker', playedBy: "System", playerColor: "#aaa" });
+    deck.push({ suit: 'Joker', value: 'Joker', isJoker: true, displayValue: '🃏', displaySuit: '🃏', originalSuit: 'Joker', playedBy: "System", playerColor: "#aaa" });
     return deck;
 }
 
@@ -65,6 +64,17 @@ function isPickupCard(card) {
     return false;
 }
 
+function isValidConsecutiveStep(card, prevCard) {
+    if (card.value === prevCard.value) return true;
+
+    if (card.suit === prevCard.suit) {
+        let idxA = VALUES.indexOf(prevCard.value);
+        let idxB = VALUES.indexOf(card.value);
+        if (Math.abs(idxA - idxB) === 1) return true;
+    }
+    return false;
+}
+
 function isValidStep(card, activeVal, activeSuit, suitOverride, isFirstCard) {
     if (isFirstCard && card.displayValue === 'A') return true;
     if (card.displayValue === activeVal) return true;
@@ -80,13 +90,12 @@ function isValidStep(card, activeVal, activeSuit, suitOverride, isFirstCard) {
 function getValidPermutation(cards, room) {
     if (room.playedStack.length === 0) return false;
     
-    // EXPLICIT CORE CONSTRAINT: Defending players cannot deploy multi-card runs as a shield!
     if (room.activePickupCount > 0 && cards.length > 1) {
         return false;
     }
 
     let currentTop = room.playedStack[room.playedStack.length - 1];
-    let initialSuit = currentTop.displaySuit;
+    let initialSuit = room.activeSuitOverride || currentTop.displaySuit;
     let initialVal = currentTop.displayValue;
     let initialOverride = room.activeSuitOverride;
 
@@ -107,25 +116,45 @@ function getValidPermutation(cards, room) {
         for (let i = 0; i < order.length; i++) {
             let card = order[i];
             
-            // PRIORITY GATEWAY: Is this an un-interrupted same-suit 2 -> Ace structural transition link?
-            if (i > 0 && activeVal === '2' && card.displayValue === 'A' && card.displaySuit === activeSuit) {
-                activeVal = card.displayValue;
-                activeSuit = card.displaySuit;
-                suitOverride = null;
-            } 
-            // Fallback validation if it's a standard run sequence
-            else if (isValidStep(card, activeVal, activeSuit, suitOverride, i === 0)) {
-                activeVal = card.displayValue; 
-                activeSuit = card.displaySuit; 
-                suitOverride = null;
+            if (i === 0) {
+                if (!isValidStep(card, activeVal, activeSuit, suitOverride, true)) {
+                    sequenceIsValid = false; break;
+                }
             } else {
-                sequenceIsValid = false; 
-                break;
+                let prevCard = order[i - 1];
+
+                if (prevCard.displayValue === '2' && card.displayValue === 'A' && card.suit === prevCard.suit) {
+                    // Valid identical-suit 2 -> Ace link bridge step
+                } 
+                else if (prevCard.displayValue === 'A' && card.displayValue === '2' && card.suit === prevCard.suit) {
+                    // Valid identical-suit Ace -> 2 link bridge step
+                }
+                else if (!isValidConsecutiveStep(card, prevCard)) {
+                    sequenceIsValid = false; break;
+                }
             }
+            
+            activeVal = card.displayValue;
+            activeSuit = card.displaySuit;
+            suitOverride = null;
         }
         if (sequenceIsValid) return order;
     }
     return false;
+}
+
+function broadcastGameState(room) {
+    room.players.forEach(p => {
+        let localizedRoomState = JSON.parse(JSON.stringify(room));
+        let isSafeSpectator = (p.out && !p.finishedOnPickup);
+
+        localizedRoomState.players.forEach(pl => {
+            if (pl.id !== p.id && !isSafeSpectator) {
+                pl.hand = pl.hand.map(c => ({ isJoker: c.isJoker }));
+            }
+        });
+        io.to(p.id).emit('gameStateSynced', localizedRoomState);
+    });
 }
 
 io.on('connection', (socket) => {
@@ -141,7 +170,7 @@ io.on('connection', (socket) => {
             p.id = socket.id; 
             socket.join(code);
             socket.emit('sessionRecoverySuccess', { room, myId: socket.id });
-            io.to(code).emit('gameStateSynced', room);
+            broadcastGameState(room);
         }
     });
 
@@ -180,7 +209,8 @@ io.on('connection', (socket) => {
             existingPlayer.id = socket.id;
             socket.join(code);
             io.to(code).emit('roomUpdated', room);
-            return socket.emit('joinSuccess', { room, myId: socket.id });
+            socket.emit('joinSuccess', { room, myId: socket.id });
+            return broadcastGameState(room);
         }
 
         if (room.gameStarted) return socket.emit('errorMsg', 'Game already started!');
@@ -241,6 +271,8 @@ io.on('connection', (socket) => {
                 if(p.hand[conf.index]) {
                     p.hand[conf.index].displayValue = conf.value;
                     p.hand[conf.index].displaySuit = conf.suit;
+                    p.hand[conf.index].suit = conf.suit;
+                    p.hand[conf.index].value = conf.value;
                     p.hand[conf.index].isJoker = true;
                 }
             });
@@ -259,11 +291,11 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room) return;
 
-        // Visual History tracking: modify the display metadata of the dropped Ace on stack
         if (room.playedStack.length > 0) {
             let topCard = room.playedStack[room.playedStack.length - 1];
             if (topCard.displayValue === 'A') {
-                topCard.displaySuit = `${topCard.suit} (→ ${suit})`;
+                topCard.displaySuit = suit; 
+                topCard.suitOverrideActive = true; 
             }
         }
 
@@ -282,14 +314,14 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room) return;
         const p = room.players.find(pl => pl.id === socket.id);
-        if (p) { p.saidCard = true; io.to(roomCode).emit('gameStateSynced', room); }
+        if (p) { p.saidCard = true; broadcastGameState(room); }
     });
 
     socket.on('rearrangeHand', ({ roomCode, newHand }) => {
         const room = rooms[roomCode];
         if (!room) return;
         const p = room.players.find(pl => pl.id === socket.id);
-        if (p) { p.hand = newHand; io.to(roomCode).emit('gameStateSynced', room); }
+        if (p) { p.hand = newHand; broadcastGameState(room); }
     });
 
     socket.on('disconnect', () => {
@@ -302,7 +334,7 @@ io.on('connection', (socket) => {
                     if (room.players.length === 0 || room.players.every(pl => pl.isAI)) delete rooms[code];
                     else io.to(code).emit('roomUpdated', room);
                 } else {
-                    io.to(code).emit('gameStateSynced', room);
+                    broadcastGameState(room);
                 }
             }
         }
@@ -333,6 +365,7 @@ function initializeRound(room) {
     room.playedStack = [startCard];
 
     io.to(room.code).emit('gameStartedSignal', room);
+    broadcastGameState(room);
     checkAndExecuteBotTurn(room);
 }
 
@@ -342,32 +375,31 @@ function executeChainActions(room, chain, player) {
 
     for (let i = 0; i < chain.length; i++) {
         let card = chain[i];
-        
-        // Match Engine Hook: Identify if this specific card step initiates a neutralization event
-        if (card.displayValue === '2' && i + 1 < chain.length && chain[i + 1].displayValue === 'A' && chain[i + 1].displaySuit === card.displaySuit) {
+        if (card.displayValue === '2' && i + 1 < chain.length && chain[i + 1].displayValue === 'A' && chain[i + 1].suit === card.suit) {
             neutralizedAceIndices.push(i + 1);
         }
+    }
 
+    chain.forEach((card, i) => {
         lastPlayed = card; 
         lastPlayed.playedBy = player.name; 
         lastPlayed.playerColor = player.color;
         room.playedStack.push(lastPlayed);
+    });
 
-        let val = card.displayValue; 
-        let suit = card.displaySuit;
+    let topVal = lastPlayed.displayValue;
+    let topSuit = lastPlayed.displaySuit;
 
-        if (val === '2') {
-            // If this '2' was immediately suppressed by a matching tracking index, skip stacking penalties
-            let isFollowedByNeutralizer = (i + 1 < chain.length && chain[i + 1].displayValue === 'A' && chain[i + 1].displaySuit === suit);
-            if (!isFollowedByNeutralizer && !neutralizedAceIndices.includes(i)) {
-                room.activePickupCount += 2;
-            }
+    if (topVal === '2') {
+        let lastCardWasNeutralized = neutralizedAceIndices.includes(chain.length - 1);
+        if (!lastCardWasNeutralized) {
+            room.activePickupCount += 2;
         }
-        else if (val === 'J' && (suit === '♠' || suit === '♣')) room.activePickupCount += 4;
-        else if (val === 'J' && (suit === '♥' || suit === '♦')) room.activePickupCount = 0;
-        else if (val === '8') advanceTurn(room);
-        else if (val === 'K' && room.players.length > 2) room.turnDirection *= -1;
     }
+    else if (topVal === 'J' && (topSuit === '♠' || topSuit === '♣')) room.activePickupCount += 4;
+    else if (topVal === 'J' && (topSuit === '♥' || topSuit === '♦')) room.activePickupCount = 0;
+    else if (topVal === '8') advanceTurn(room);
+    else if (topVal === 'K' && room.players.length > 2) room.turnDirection *= -1;
 
     if (player.hand.length === 0) {
         if (!player.saidCard) {
@@ -390,7 +422,7 @@ function executeChainActions(room, chain, player) {
         }
     }
 
-    let lastCardWasAce = (lastPlayed && lastPlayed.displayValue === 'A');
+    let lastCardWasAce = (topVal === 'A');
     let lastCardWasNeutralized = neutralizedAceIndices.includes(chain.length - 1);
 
     if (lastCardWasAce && !lastCardWasNeutralized && !player.isAI) {
@@ -400,11 +432,11 @@ function executeChainActions(room, chain, player) {
         player.hand.forEach(c => { if(counts[c.displaySuit] !== undefined) counts[c.displaySuit]++; });
         let best = '♠'; for(let s in counts) { if(counts[s] > counts[best]) best = s; }
         
-        // Bot UI Tracking Mirror: Appends chosen suit identifier straight to the server metadata log object
         if (room.playedStack.length > 0) {
             let topCard = room.playedStack[room.playedStack.length - 1];
             if (topCard.displayValue === 'A') {
-                topCard.displaySuit = `${topCard.suit} (→ ${best})`;
+                topCard.displaySuit = best;
+                topCard.suitOverrideActive = true;
             }
         }
 
@@ -445,6 +477,7 @@ function drawCards(room, player, count) {
                         c.suit = 'Joker';
                         c.value = 'Joker';
                     } 
+                    c.suitOverrideActive = false; 
                 });
                 shuffle(room.deck); 
                 room.playedStack = [top];
@@ -474,12 +507,14 @@ function completeTurnPassing(room) {
             else if (lastPlayer.rank === 3) lastPlayer.scores.third++;
             else if (lastPlayer.rank === 4) lastPlayer.scores.fourth++;
         }
-        room.isGameOver = true; io.to(room.code).emit('gameStateSynced', room); return;
+        room.isGameOver = true; 
+        broadcastGameState(room); 
+        return;
     }
 
     let currentTop = room.playedStack[room.playedStack.length - 1];
     if (currentTop && currentTop.displayValue === 'K' && activeCount === 2) {
-        if (!room.players[room.currentPlayerIdx].out) { io.to(room.code).emit('gameStateSynced', room); checkAndExecuteBotTurn(room); return; }
+        if (!room.players[room.currentPlayerIdx].out) { broadcastGameState(room); checkAndExecuteBotTurn(room); return; }
     }
 
     advanceTurn(room);
@@ -512,7 +547,7 @@ function completeTurnPassing(room) {
         if (!target.out) break;
         advanceTurn(room); loops++;
     }
-    io.to(room.code).emit('gameStateSynced', room);
+    broadcastGameState(room);
     checkAndExecuteBotTurn(room);
 }
 
@@ -523,7 +558,6 @@ function checkAndExecuteBotTurn(room) {
 
     const roomCode = room.code;
     
-    // Clear and regulate room cadence loops completely
     if (botTimeouts[roomCode]) {
         clearTimeout(botTimeouts[roomCode]);
         botTimeouts[roomCode] = null;
@@ -539,7 +573,6 @@ function checkAndExecuteBotTurn(room) {
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
 
-        // --- 1. EMERGENCY PENALTY STATE ---
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => {
                 if (c.isJoker) return true;
@@ -563,7 +596,6 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        // --- 2. PERMUTATIVE POOL COMBINATORIAL SEARCH ---
         let bestSequenceIndices = [];
         let bestJokerConfigs = [];
 
@@ -587,8 +619,7 @@ function checkAndExecuteBotTurn(room) {
                         cardCopy.displayValue = currentVal === 'Joker' ? '7' : currentVal;
                     }
 
-                    // Strict validation gateway matching structural look ahead parameters
-                    if (i > 0 && currentVal === '2' && cardCopy.displayValue === 'A' && cardCopy.displaySuit === currentSuit) {
+                    if (i > 0 && currentVal === '2' && cardCopy.displayValue === 'A' && cardCopy.suit === currentSuit) {
                         if (realCard.isJoker) {
                             validOrderConfigs.push({ index: handIdx, suit: cardCopy.displaySuit, value: cardCopy.displayValue });
                         }
@@ -635,7 +666,6 @@ function checkAndExecuteBotTurn(room) {
 
         runPowersetScanner(0, []);
 
-        // --- 3. FINAL EXECUTION ROUTINE ---
         if (bestSequenceIndices && bestSequenceIndices.length > 0) {
             if (currentMover.hand.length - bestSequenceIndices.length <= 1) {
                 currentMover.saidCard = true;
@@ -646,6 +676,8 @@ function checkAndExecuteBotTurn(room) {
                 if (jCard) {
                     jCard.displaySuit = conf.suit;
                     jCard.displayValue = conf.value;
+                    jCard.suit = conf.suit;
+                    jCard.value = conf.value;
                 }
             });
 
