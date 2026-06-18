@@ -123,14 +123,18 @@ function getValidPermutation(cards, room) {
             } else {
                 let prevCard = order[i - 1];
 
+                // 1. Structural bridge match gate for same-suit 2 -> Ace
                 if (prevCard.displayValue === '2' && card.displayValue === 'A' && card.suit === prevCard.suit) {
-                    // Valid identical-suit 2 -> Ace link bridge step
+                    // Valid step
                 } 
+                // 2. Structural bridge match gate for same-suit Ace -> 2
                 else if (prevCard.displayValue === 'A' && card.displayValue === '2' && card.suit === prevCard.suit) {
-                    // Valid identical-suit Ace -> 2 link bridge step
+                    // Valid step
                 }
+                // 3. Fallback gate: force absolute consecutive rule matching if no bridges were matched
                 else if (!isValidConsecutiveStep(card, prevCard)) {
-                    sequenceIsValid = false; break;
+                    sequenceIsValid = false; 
+                    break;
                 }
             }
             
