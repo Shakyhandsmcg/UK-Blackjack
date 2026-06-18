@@ -258,6 +258,15 @@ io.on('connection', (socket) => {
     socket.on('submitAceOverride', ({ roomCode, suit }) => {
         const room = rooms[roomCode];
         if (!room) return;
+
+        // Visual History tracking: modify the display metadata of the dropped Ace on stack
+        if (room.playedStack.length > 0) {
+            let topCard = room.playedStack[room.playedStack.length - 1];
+            if (topCard.displayValue === 'A') {
+                topCard.displaySuit = `${topCard.suit} (→ ${suit})`;
+            }
+        }
+
         room.activeSuitOverride = suit;
         completeTurnPassing(room);
     });
@@ -390,10 +399,18 @@ function executeChainActions(room, chain, player) {
         let counts = { '♠':0, '♥':0, '♦':0, '♣':0 };
         player.hand.forEach(c => { if(counts[c.displaySuit] !== undefined) counts[c.displaySuit]++; });
         let best = '♠'; for(let s in counts) { if(counts[s] > counts[best]) best = s; }
+        
+        // Bot UI Tracking Mirror: Appends chosen suit identifier straight to the server metadata log object
+        if (room.playedStack.length > 0) {
+            let topCard = room.playedStack[room.playedStack.length - 1];
+            if (topCard.displayValue === 'A') {
+                topCard.displaySuit = `${topCard.suit} (→ ${best})`;
+            }
+        }
+
         room.activeSuitOverride = best;
         completeTurnPassing(room);
     } else {
-        // If the final card drop was part of a neutralized sequence, skip the menu selections entirely
         completeTurnPassing(room);
     }
 }
@@ -551,7 +568,6 @@ function checkAndExecuteBotTurn(room) {
         let bestJokerConfigs = [];
 
         function evaluateIndexCombo(comboIndices) {
-            // Evaluates permutations directly inside the targeted group array
             let orders = permute(comboIndices);
 
             for (let order of orders) {
