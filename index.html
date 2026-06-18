@@ -215,4 +215,520 @@ const sessionToken = localStorage.getItem('blackjack_session_token');
 const VALUE_WEIGHTS = { 'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13, 'Joker':99 };
 const SUIT_WEIGHTS = { '♠':1, '♥':2, '♦':3, '♣':4, '🃏':99 };
 
-window
+window.onload = () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const savedRoom = urlParams.get('room');
+    if (savedRoom) {
+        socket.emit('attemptSessionRecovery', { token: sessionToken, roomCode: savedRoom });
+    }
+};
+
+socket.on('sessionRecoverySuccess', ({ room, myId }) => {
+    document.getElementById('menu-container').style.display = 'none';
+    document.getElementById('game-container').style.display = 'block';
+    updateGameplayUI(room);
+});
+
+socket.on('roomCreated', (room) => { updateURLParam(room.code); displayLobby(room); });
+socket.on('joinSuccess', ({ room }) => { updateURLParam(room.code); displayLobby(room); });
+socket.on('roomUpdated', (room) => { displayLobby(room); });
+socket.on('gameStateSynced', (room) => { updateGameplayUI(room); });
+socket.on('errorMsg', (msg) => alert(msg));
+
+socket.on('gameStartedSignal', (room) => {
+    document.getElementById('menu-container').style.display = 'none';
+    document.getElementById('game-container').style.display = 'block';
+    updateGameplayUI(room);
+});
+
+socket.on('promptAceSelectionNetwork', ({ room, playerId }) => {
+    currentRoom = room;
+    if (playerId === socket.id) {
+        let container = document.createElement('div'); container.className = "modal-options";
+        ['♠', '♥', '♦', '♣'].forEach(s => {
+            let b = document.createElement('button'); b.style.fontSize = "24px"; b.innerText = s;
+            b.onclick = () => { socket.emit('submitAceOverride', { roomCode: room.code, suit: s }); hideModal(); };
+            container.appendChild(b);
+        });
+        showCustomModal("Ace Suit Choice Selection", container);
+    } else {
+        updateGameplayUI(room);
+    }
+});
+
+function updateURLParam(code) {
+    const newurl = window.location.protocol + "//" + window.location.host + window.location.pathname + '?room=' + code;
+    window.history.pushState({path:newurl},'',newurl);
+}
+
+function hostRoom() {
+    const name = document.getElementById('host-name-in').value.trim();
+    const maxP = document.getElementById('max-players-select').value;
+    if(!name) return alert("Enter Name");
+    socket.emit('createRoom', { hostName: name, maxPlayers: maxP, token: sessionToken });
+}
+
+function joinRoom() {
+    const name = document.getElementById('join-name-in').value.trim();
+    const code = document.getElementById('room-code-in').value.trim().toUpperCase();
+    if(!name || !code) return alert("Enter Info");
+    socket.emit('joinRoom', { name, roomCode: code, token: sessionToken });
+}
+
+function addBotToLobby() {
+    socket.emit('addBotServer', { roomCode: currentRoom.code });
+}
+
+function launchGame() {
+    socket.emit('startGameServer', { roomCode: currentRoom.code });
+}
+
+function triggerRoundRematch() {
+    socket.emit('requestRematchServer', { roomCode: currentRoom.code });
+}
+
+function quitGameActionConfirm() {
+    const choice = confirm("Are you sure you want to quit this room? You will lose your current hand and score stats.");
+    if (choice) {
+        localStorage.removeItem('blackjack_session_token');
+        if (currentRoom) {
+            socket.emit('leaveRoomPermanently', { roomCode: currentRoom.code, token: sessionToken });
+        }
+        window.location.href = window.location.pathname;
+    }
+}
+
+// CORRECTION: Rebuilt utilizing child text elements and appends to support select dropdown configurations
+function displayLobby(room) {
+    currentRoom = room;
+    document.getElementById('host-panel').style.display = 'none';
+    document.getElementById('join-panel').style.display = 'none';
+    document.getElementById('lobby-waiting').style.display = 'block';
+    document.getElementById('display-room-code').innerText = room.code;
+    document.getElementById('lobby-count').innerText = room.players.length;
+    document.getElementById('lobby-max').innerText = room.maxPlayers;
+    
+    let listArea = document.getElementById('lobby-player-list'); 
+    listArea.innerHTML = '';
+    let amIHost = false;
+    
+    room.players.forEach(p => {
+        let pDiv = document.createElement('div'); 
+        pDiv.style.color = p.color;
+        pDiv.style.marginBottom = "8px";
+        pDiv.style.display = "flex";
+        pDiv.style.alignItems = "center";
+        pDiv.style.gap = "10px";
+        
+        let label = document.createElement('span');
+        label.innerText = `• ${p.name} ${p.id === socket.id ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
+        pDiv.appendChild(label);
+        
+        if (p.isAI) {
+            let select = document.createElement('select');
+            select.style.width = "auto";
+            select.style.padding = "4px 8px";
+            select.style.margin = "0";
+            select.style.fontSize = "12px";
+            select.style.background = "#222";
+            select.style.color = "white";
+            select.style.border = "1px solid " + p.color;
+            select.style.borderRadius = "4px";
+            
+            let easyOpt = new Option("Easy", "easy");
+            let medOpt = new Option("Medium", "medium");
+            let hardOpt = new Option("Hard", "hard");
+            
+            select.add(easyOpt);
+            select.add(medOpt);
+            select.add(hardOpt);
+            
+            select.value = p.botDifficulty || "medium";
+            
+            let hostMe = room.players.find(pl => pl.id === socket.id);
+            if (hostMe && hostMe.isHost) {
+                select.onchange = () => {
+                    socket.emit('updateBotDifficultyServer', { 
+                        roomCode: room.code, 
+                        botId: p.id, 
+                        difficulty: select.value 
+                    });
+                };
+            } else {
+                select.disabled = true;
+                select.style.opacity = "0.7";
+            }
+            pDiv.appendChild(select);
+        }
+        
+        listArea.appendChild(pDiv);
+        if(p.id === socket.id && p.isHost) amIHost = true;
+    });
+    
+    if (amIHost) {
+        document.getElementById('add-ai-btn').style.display = (room.players.length < room.maxPlayers) ? 'block' : 'none';
+        document.getElementById('start-game-lobby-btn').style.display = (room.players.length >= 2) ? 'block' : 'none';
+    } else {
+        document.getElementById('add-ai-btn').style.display = 'none';
+        document.getElementById('start-game-lobby-btn').style.display = 'none';
+    }
+}
+
+function playSelectionNetwork() {
+    if(selectedCards.length === 0) return;
+    let sortedSel = [...selectedCards].sort((a,b) => a.order - b.order);
+    let rawIndices = sortedSel.map(s => s.index);
+
+    socket.emit('playCards', {
+        roomCode: currentRoom.code,
+        cardIndices: rawIndices,
+        jokerConfigurations: pendingJokerConvs
+    });
+    selectedCards = []; pendingJokerConvs = [];
+}
+
+function drawOrPassNetwork() {
+    socket.emit('drawOrPass', { roomCode: currentRoom.code });
+    selectedCards = []; pendingJokerConvs = [];
+}
+
+function sayCardNetwork() {
+    socket.emit('sayCardDeclaration', { roomCode: currentRoom.code });
+}
+
+function sortHandClient(type) {
+    const me = currentRoom.players.find(pl => pl.id === socket.id);
+    if (!me) return;
+    me.hand.sort((a,b) => {
+        if (type === 'SUIT') {
+            let sDiff = (SUIT_WEIGHTS[a.displaySuit]||0) - (SUIT_WEIGHTS[b.displaySuit]||0);
+            if(sDiff !== 0) return sDiff;
+            return (VALUE_WEIGHTS[a.displayValue]||0) - (VALUE_WEIGHTS[b.displayValue]||0);
+        } else {
+            let vDiff = (VALUE_WEIGHTS[a.displayValue]||0) - (VALUE_WEIGHTS[b.displayValue]||0);
+            if(vDiff !== 0) return vDiff;
+            return (SUIT_WEIGHTS[a.displaySuit]||0) - (SUIT_WEIGHTS[b.displaySuit]||0);
+        }
+    });
+    selectedCards = [];
+    pendingJokerConvs = [];
+    
+    socket.emit('rearrangeHand', { roomCode: currentRoom.code, newHand: me.hand });
+    updateGameplayUI(currentRoom);
+}
+
+function setupDragDrop(cardDiv, cardIdx) {
+    cardDiv.draggable = true;
+    cardDiv.ondragstart = (e) => { draggedCardIdx = cardIdx; e.dataTransfer.effectAllowed = 'move'; };
+    cardDiv.ondragover = (e) => e.preventDefault();
+    cardDiv.ondrop = (e) => {
+        e.preventDefault();
+        if(draggedCardIdx === null || draggedCardIdx === cardIdx) return;
+        const me = currentRoom.players.find(pl => pl.id === socket.id);
+        if(!me) return;
+        let moved = me.hand.splice(draggedCardIdx, 1)[0];
+        me.hand.splice(cardIdx, 0, moved);
+        draggedCardIdx = null; selectedCards = [];
+        socket.emit('rearrangeHand', { roomCode: currentRoom.code, newHand: me.hand });
+    };
+}
+
+function toggleSelectClient(cardIdx, isJoker, alreadyConverted) {
+    let exist = selectedCards.findIndex(s => s.index === cardIdx);
+    if (exist > -1) {
+        selectedCards.splice(exist, 1);
+        selectedCards.forEach((s, idx) => s.order = idx + 1);
+        pendingJokerConvs = pendingJokerConvs.filter(c => c.index !== cardIdx);
+        updateGameplayUI(currentRoom);
+    } else {
+        if (isJoker && !alreadyConverted) {
+            promptJokerModal(cardIdx);
+        } else {
+            selectedCards.push({ index: cardIdx, order: selectedCards.length + 1 });
+            updateGameplayUI(currentRoom);
+        }
+    }
+}
+
+function updateGameplayUI(room) {
+    currentRoom = room;
+    let currentTop = room.playedStack[room.playedStack.length - 1];
+    let activePlayer = room.players[room.currentPlayerIdx];
+    let amIHost = room.players.find(pl => pl.id === socket.id)?.isHost || false;
+    
+    const localUserInsidePlayers = room.players.find(pl => pl.sessionToken === sessionToken);
+    const isMyTurnRightNow = localUserInsidePlayers && room.players[room.currentPlayerIdx]?.sessionToken === sessionToken;
+
+    let statusText = room.isGameOver ? "Match Finished!" : `Turn: ${activePlayer.name}`;
+    if (!room.isGameOver && room.activePickupCount > 0) statusText += ` | ⚠️ Next Draws (${room.activePickupCount})`;
+    if (!room.isGameOver && room.activeSuitOverride) statusText += ` | Suit Called: ${room.activeSuitOverride}`;
+    document.getElementById('status-text').innerText = statusText;
+    
+    document.getElementById('back-to-home-btn').innerText = room.isGameOver ? "Exit Room" : "Quit Game";
+    document.getElementById('rematch-trigger-btn').style.display = (room.isGameOver && amIHost) ? 'block' : 'none';
+    document.getElementById('global-say-card-btn').style.display = room.isGameOver ? 'none' : 'block';
+
+    const globalCardButtonObj = document.getElementById('global-say-card-btn');
+    if (globalCardButtonObj) {
+        if (!room.isGameOver && isMyTurnRightNow) {
+            globalCardButtonObj.disabled = true;
+            globalCardButtonObj.style.opacity = '0.4';
+            globalCardButtonObj.style.cursor = 'not-allowed';
+            globalCardButtonObj.title = "Too late! You must declare 'Card' during an opponent's turn.";
+        } else {
+            globalCardButtonObj.disabled = false;
+            globalCardButtonObj.style.opacity = '1';
+            globalCardButtonObj.style.cursor = 'pointer';
+            globalCardButtonObj.title = "";
+        }
+    }
+
+    if (room.isGameOver && !document.getElementById('choice-modal').style.display) {
+        openScoreboardPopUp();
+    }
+
+    let hist = document.getElementById('stack-history'); hist.innerHTML = '';
+    let start = Math.max(0, room.playedStack.length - 6);
+    for(let i=start; i<room.playedStack.length-1; i++) {
+        let cData = room.playedStack[i];
+        let wrap = document.createElement('div'); wrap.className = 'card-wrapper';
+        let hasOverride = (i === room.playedStack.length - 2 && room.activeSuitOverride !== null);
+        wrap.appendChild(renderCardGraphic(cData, i, true, false, hasOverride ? room.activeSuitOverride : null));
+        if (i === start || room.playedStack[i-1].playedBy !== cData.playedBy) {
+            let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = cData.playerColor;
+            let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = cData.playerColor; tag.innerText = cData.playedBy;
+            ln.appendChild(tag); wrap.appendChild(ln);
+        }
+        hist.appendChild(wrap);
+    }
+
+    let topCont = document.getElementById('current-card-container'); topCont.innerHTML = '';
+    if (currentTop) {
+        let wrap = document.createElement('div'); wrap.className = 'card-wrapper';
+        wrap.appendChild(renderCardGraphic(currentTop, room.playedStack.length-1, true, false, room.activeSuitOverride));
+        let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = currentTop.playerColor;
+        let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = currentTop.playerColor; tag.innerText = currentTop.playedBy;
+        ln.appendChild(tag); wrap.appendChild(ln); topCont.appendChild(wrap);
+    }
+
+    let myArea = document.getElementById('my-personal-area'); myArea.innerHTML = '';
+    let oppArea = document.getElementById('opponents-area'); oppArea.innerHTML = '';
+
+    room.players.forEach((p, pIdx) => {
+        let isActive = (!room.isGameOver && pIdx === room.currentPlayerIdx);
+        let isMe = (p.sessionToken === sessionToken); 
+        
+        let sec = document.createElement('div'); 
+        sec.className = `player-section ${isActive ? 'active' : ''} ${isMe ? 'my-personal-row' : ''}`;
+        
+        let headRow = document.createElement('div'); headRow.className = 'player-header-row';
+        let h4 = document.createElement('h4'); h4.style.margin = '0'; h4.style.color = p.color;
+        
+        let addon = p.out ? ` - [OUT / ${getOrdinal(p.rank)}]` : (p.saidCard ? ` - [SAID CARD]` : '');
+        h4.innerText = `${p.name} (${p.hand.length} Cards)${addon}`;
+        headRow.appendChild(h4);
+
+        if (isMe && !p.out) {
+            let sBox = document.createElement('div');
+            let bS = document.createElement('button'); bS.className = 'btn-sort'; bS.innerText = 'Sort Suit'; bS.onclick = () => sortHandClient('SUIT');
+            let bN = document.createElement('button'); bN.className = 'btn-sort'; bN.innerText = 'Sort Value'; bN.onclick = () => sortHandClient('NUMBER');
+            sBox.appendChild(bS); sBox.appendChild(bN); headRow.appendChild(sBox);
+        }
+        sec.appendChild(headRow);
+
+        let handDiv = document.createElement('div'); handDiv.className = 'hand';
+        if (p.hand && Array.isArray(p.hand)) {
+            p.hand.forEach((card, cIdx) => {
+                let revealFace = isMe && !p.out;
+                let clickable = isActive && isMe && !p.out;
+                handDiv.appendChild(renderCardGraphic(card, cIdx, revealFace, clickable, null));
+            });
+        }
+        sec.appendChild(handDiv);
+
+        if (isActive && isMe && !p.out) {
+            let ctrl = document.createElement('div'); ctrl.className = 'controls';
+            let pBtn = document.createElement('button'); pBtn.className = 'btn-play'; pBtn.innerText = 'Play Selection'; pBtn.onclick = playSelectionNetwork;
+            let dBtn = document.createElement('button'); dBtn.className = 'btn-draw'; dBtn.innerText = room.activePickupCount > 0 ? `Pick up (${room.activePickupCount})` : 'Draw / Pass'; dBtn.onclick = drawOrPassNetwork;
+            ctrl.appendChild(pBtn); ctrl.appendChild(dBtn); sec.appendChild(ctrl);
+        }
+        
+        if (isMe) {
+            myArea.appendChild(sec);
+        } else {
+            oppArea.appendChild(sec);
+        }
+    });
+}
+
+function renderCardGraphic(card, index, showFace, interactive, activeSuitOverride) {
+    let div = document.createElement('div');
+    if (!showFace) { div.className = 'card hidden-face'; return div; }
+
+    let isOriginallyJoker = (card.isJoker === true || card.value === 'Joker');
+    let localJokerConfig = pendingJokerConvs.find(c => c.index === index);
+
+    let finalValue = card.displayValue;
+    let finalSuit = card.displaySuit;
+
+    if (interactive && isOriginallyJoker && localJokerConfig) {
+        finalValue = localJokerConfig.value;
+        finalSuit = localJokerConfig.suit;
+    }
+    if (card.displayValue === 'A' && activeSuitOverride !== null) {
+        finalSuit = activeSuitOverride;
+    }
+
+    let isRed = finalSuit === '♥' || finalSuit === '♦';
+    div.className = `card ${isRed ? 'red' : ''}`;
+
+    let sel = selectedCards.find(s => s.index === index);
+    if (interactive && sel) {
+        div.classList.add('selected');
+        let bd = document.createElement('div'); bd.className = 'badge'; bd.innerText = sel.order; div.appendChild(bd);
+    }
+
+    let top = document.createElement('div'); top.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); div.appendChild(top);
+    
+    if (isOriginallyJoker) {
+        if (finalValue === 'Joker') {
+            let wm = document.createElement('div'); wm.className = 'card-watermark joker-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
+        } else {
+            let wm = document.createElement('div'); wm.className = 'card-watermark joker-ghost-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
+        }
+    } else if (card.displayValue === 'A' && activeSuitOverride !== null) {
+        let ghost = document.createElement('div'); ghost.className = 'card-watermark ace-ghost-watermark'; ghost.innerText = card.displaySuit; div.appendChild(ghost);
+    }
+    
+    let bot = document.createElement('div'); bot.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); bot.style.textAlign = 'right'; div.appendChild(bot);
+
+    if (interactive) {
+        div.onclick = () => toggleSelectClient(index, isOriginallyJoker, localJokerConfig !== undefined);
+        setupDragDrop(div, index);
+    }
+    return div;
+}
+
+function promptJokerModal(cardIdx) {
+    let container = document.createElement('div'); container.style.display = 'flex'; container.style.flexDirection = 'column'; container.style.gap = '10px';
+    let sPara = document.createElement('p'); sPara.innerText = "1. Pick Suit:"; container.appendChild(sPara);
+    let sRow = document.createElement('div'); sRow.className = "modal-options";
+    let chosenSuit = '♥';
+    ['♠', '♥', '♦', '♣'].forEach(s => {
+        let b = document.createElement('button'); b.innerText = s;
+        b.onclick = () => { chosenSuit = s; sBtns.forEach(btn => btn.style.background = '#e0e0e0'); b.style.background = '#ffeb3b'; };
+        sRow.appendChild(b);
+    });
+    let sBtns = Array.from(sRow.children); sBtns[0].style.background = '#ffeb3b'; container.appendChild(sRow);
+
+    let vPara = document.createElement('p'); vPara.innerText = "2. Pick Value:"; container.appendChild(vPara);
+    let vRow = document.createElement('div'); vRow.className = "modal-options";
+    ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'].forEach(v => {
+        let b = document.createElement('button'); b.innerText = v;
+        b.onclick = () => {
+            pendingJokerConvs.push({ index: cardIdx, value: v, suit: chosenSuit });
+            selectedCards.push({ index: cardIdx, order: selectedCards.length + 1 });
+            hideModal();
+            updateGameplayUI(currentRoom);
+        };
+        vRow.appendChild(b);
+    });
+    container.appendChild(vRow); showCustomModal("Convert Joker Identity", container);
+}
+
+function openScoreboardPopUp() {
+    if (!currentRoom) return alert("No active match session found.");
+    
+    let maxWins = -1;
+    currentRoom.players.forEach(p => { if(p.scores && p.scores.first > maxWins) maxWins = p.scores.first; });
+
+    let div = document.createElement('div');
+    let tbl = document.createElement('table'); tbl.className = "score-table";
+    tbl.innerHTML = `
+        <thead>
+            <tr>
+                <th style="text-align:left;">Player Profile</th>
+                <th>1st</th>
+                <th>2nd</th>
+                <th>3rd</th>
+                <th>4th</th>
+            </tr>
+        </thead>
+        <tbody>
+    `;
+
+    currentRoom.players.forEach(p => {
+        let scoresObj = p.scores || { first: 0, second: 0, third: 0, fourth: 0 };
+        let isLeader = (maxWins > 0 && scoresObj.first === maxWins);
+        let medal = isLeader ? `<span class="medal-icon">🥇</span>` : '';
+        tbl.innerHTML += `
+            <tr>
+                <td style="text-align:left; font-weight:bold; color:${p.color}">${p.name} ${p.sessionToken === sessionToken ? '(You)' : ''} ${medal}</td>
+                <td style="background:rgba(76,175,80,0.1); font-weight:bold;">${scoresObj.first}</td>
+                <td>${scoresObj.second}</td>
+                <td>${scoresObj.third}</td>
+                <td>${scoresObj.fourth}</td>
+            </tr>
+        `;
+    });
+    tbl.innerHTML += `</tbody>`; div.appendChild(tbl);
+    showCustomModal("Tournament Standings", div);
+}
+
+function openRulesPopUp() {
+    let container = document.createElement('div'); container.className = "rules-content-body";
+    container.innerHTML = `
+        <h3>🎮 The Basics</h3>
+        <p><b>Deal:</b> Start with 7 cards each. Match top card by Suit or Value.</p>
+        <p><b>Runs:</b> Play multiple cards in a chain if they match suit or number sequentially (e.g. 4/5/6 of Hearts).</p>
+        <p><b>Draw:</b> If you can't play (or choose not to), draw 1 card and pass.</p>
+
+        <h3>🚀 Winning & "Saying Card"</h3>
+        <p><b>The Rule:</b> You <b>MUST</b> press 'Say Card' during <i>someone else's turn</i> when you are ready to finish.</p>
+        <p><b>Missed it?</b> If it comes back to your turn and you didn't say it, you can't win yet.</p>
+        <p><b>Reset:</b> If you say it but can't finish on your turn, you must say it again on an opponent's turn.</p>
+
+        <h3>⚔️ Attack Cards (They Stack!)</h3>
+        <ul>
+            <li><b>Any 2:</b> Next player picks up 2 cards.</li>
+            <li><b>♠/♣ Jack (Black Jacks):</b> Next player picks up 4 cards.</li>
+            <li><b>Chain the Pain:</b> Stack 2s and Black Jacks together to pass an even bigger penalty pool down the line!</li>
+        </ul>
+
+        <h3>🛡️ Defense & Action Cards</h3>
+        <ul>
+            <li><b>♥/♦ Jack (Red Jacks):</b> Instantly cancels an active penalty pool back to 0.</li>
+            <li><b>Ace (Any Suit):</b> Wildcard! Plays on anything. You call a new suit to follow.</li>
+            <li><b>Queen (Any Suit):</b> Universal Bridge. Play any card on top of a Queen.</li>
+            <li><b>King (Any Suit):</b> Reverses turn order direction. (In 2-player games, it's your go again instantly).</li>
+            <li><b>Number 8:</b> Next player skips a go. Multiple 8s compound to skip multiple targets.</li>
+            <li><b>Joker:</b> Fully wild—morphs into any identity configuration you choose.</li>
+        </ul>
+
+        <h3>🔄 The "Bring Back" Rule</h3>
+        <p>If you finish on a 2 or Black Jack, you aren't safe yet! If the penalty chains all the way back around to your empty seat, you are dragged back into play and must pick up the total accumulated cards pool. If the next target just absorbs/picks up, you win for real!</p>
+    `;
+    showCustomModal("UK Blackjack Rulebook", container);
+}
+
+function showCustomModal(title, contentElement) {
+    document.getElementById('modal-title').innerText = title;
+    let body = document.getElementById('modal-dynamic-body'); body.innerHTML = '';
+    body.appendChild(contentElement);
+    document.getElementById('modal-options').innerHTML = '';
+    document.getElementById('choice-modal').style.display = 'flex'; 
+    document.getElementById('modal-overlay').style.display = 'block';
+}
+
+function showModal(title, HTMLContent) {
+    document.getElementById('modal-title').innerText = title;
+    document.getElementById('modal-dynamic-body').innerHTML = '';
+    let opt = document.getElementById('modal-options'); opt.innerHTML = ''; opt.appendChild(HTMLContent);
+    document.getElementById('choice-modal').style.display = 'flex'; document.getElementById('modal-overlay').style.display = 'block';
+}
+
+function hideModal() { document.getElementById('choice-modal').style.display = 'none'; document.getElementById('modal-overlay').style.display = 'none'; }
+function getOrdinal(v) { if (!v) return ""; let j = v % 10, k = v % 100; if (j == 1 && k != 11) return v + "st Place"; if (j == 2 && k != 12) return v + "nd Place"; if (j == 3 && k != 13) return v + "rd Place"; return v + "th Place"; }
+</script>
+</body>
+</html>
