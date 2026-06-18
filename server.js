@@ -16,7 +16,6 @@ const rooms = {};
 const SUITS = ['♠', '♥', '♦', '♣'];
 const VALUES = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
-// Global timer map to prevent overlapping AI routines across game rooms
 const botTimeouts = {};
 
 function generateRoomCode() {
@@ -79,13 +78,18 @@ function isValidStep(card, activeVal, activeSuit, suitOverride, isFirstCard) {
 
 function getValidPermutation(cards, room) {
     if (room.playedStack.length === 0) return false;
+    
+    // STRICT CORE GUARD RAIL: No multi-card plays allowed if answering an active penalty chain!
+    if (room.activePickupCount > 0 && cards.length > 1) {
+        return false;
+    }
+
     let currentTop = room.playedStack[room.playedStack.length - 1];
     let initialSuit = currentTop.displaySuit;
     let initialVal = currentTop.displayValue;
     let initialOverride = room.activeSuitOverride;
 
     if (room.activePickupCount > 0) {
-        if (cards.length > 1) return false;
         let c = cards[0];
         let isPickup = (c.displayValue === '2' || (c.displayValue === 'J' && ['♠','♣'].includes(c.displaySuit)));
         let isRedJ = (c.displayValue === 'J' && ['♥','♦'].includes(c.displaySuit));
@@ -101,10 +105,24 @@ function getValidPermutation(cards, room) {
 
         for (let i = 0; i < order.length; i++) {
             let card = order[i];
+            
+            // Validate the literal step requirement constraint rules
             if (isValidStep(card, activeVal, activeSuit, suitOverride, i === 0)) {
-                activeVal = card.displayValue; activeSuit = card.displaySuit; suitOverride = null;
+                
+                // CRITICAL ADDITION: Check if this step is a same-suit 2 -> Ace sequential combination link
+                if (activeVal === '2' && card.displayValue === 'A' && card.displaySuit === activeSuit) {
+                    // This combination nullifies the 2's action, locking the suit straight through.
+                    activeVal = card.displayValue;
+                    activeSuit = card.displaySuit;
+                    suitOverride = null; 
+                } else {
+                    activeVal = card.displayValue; 
+                    activeSuit = card.displaySuit; 
+                    suitOverride = null;
+                }
             } else {
-                sequenceIsValid = false; break;
+                sequenceIsValid = false; 
+                break;
             }
         }
         if (sequenceIsValid) return order;
@@ -313,17 +331,43 @@ function initializeRound(room) {
 
 function executeChainActions(room, chain, player) {
     let lastPlayed = null;
-    chain.forEach(card => {
-        lastPlayed = card; lastPlayed.playedBy = player.name; lastPlayed.playerColor = player.color;
+    
+    // Tracks if an incoming Ace was successfully neutralized inside a sequential drop
+    let neutralizedAceIndices = [];
+
+    for (let i = 0; i < chain.length; i++) {
+        let card = chain[i];
+        
+        // Look-Ahead Check: If this card is a '2', and the very next card is an 'Ace' of the same suit...
+        if (card.displayValue === '2' && i + 1 < chain.length && chain[i + 1].displayValue === 'A' && chain[i + 1].displaySuit === card.displaySuit) {
+            neutralizedAceIndices.push(i + 1); // Mark the next card index as neutralized
+        }
+
+        lastPlayed = card; 
+        lastPlayed.playedBy = player.name; 
+        lastPlayed.playerColor = player.color;
         room.playedStack.push(lastPlayed);
 
-        let val = card.displayValue; let suit = card.displaySuit;
-        if (val === '2') room.activePickupCount += 2;
+        let val = card.displayValue; 
+        let suit = card.displaySuit;
+
+        // Process penalty triggers strictly if this specific card was NOT neutralized
+        if (val === '2') {
+            if (neutralizedAceIndices.includes(i)) {
+                // Do nothing: this is an Ace that was neutralized by a preceding 2
+            } else {
+                // If it's a regular 2, check if it was neutralized by an immediate follow-up Ace
+                let isFollowedByNeutralizer = (i + 1 < chain.length && chain[i + 1].displayValue === 'A' && chain[i + 1].displaySuit === suit);
+                if (!isFollowedByNeutralizer) {
+                    room.activePickupCount += 2;
+                }
+            }
+        }
         else if (val === 'J' && (suit === '♠' || suit === '♣')) room.activePickupCount += 4;
         else if (val === 'J' && (suit === '♥' || suit === '♦')) room.activePickupCount = 0;
         else if (val === '8') advanceTurn(room);
         else if (val === 'K' && room.players.length > 2) room.turnDirection *= -1;
-    });
+    }
 
     if (player.hand.length === 0) {
         if (!player.saidCard) {
@@ -346,15 +390,20 @@ function executeChainActions(room, chain, player) {
         }
     }
 
-    if (lastPlayed && lastPlayed.displayValue === 'A' && !player.isAI) {
+    // Determine if the final card is an active, un-neutralized Ace
+    let lastCardWasAce = (lastPlayed && lastPlayed.displayValue === 'A');
+    let lastCardWasNeutralized = neutralizedAceIndices.includes(chain.length - 1);
+
+    if (lastCardWasAce && !lastCardWasNeutralized && !player.isAI) {
         io.to(room.code).emit('promptAceSelectionNetwork', { room, playerId: player.id });
-    } else if (lastPlayed && lastPlayed.displayValue === 'A' && player.isAI) {
+    } else if (lastCardWasAce && !lastCardWasNeutralized && player.isAI) {
         let counts = { '♠':0, '♥':0, '♦':0, '♣':0 };
         player.hand.forEach(c => { if(counts[c.displaySuit] !== undefined) counts[c.displaySuit]++; });
         let best = '♠'; for(let s in counts) { if(counts[s] > counts[best]) best = s; }
         room.activeSuitOverride = best;
         completeTurnPassing(room);
     } else {
+        // If an Ace was neutralized, it skips suit-selection menus and simply advances turn
         completeTurnPassing(room);
     }
 }
@@ -467,7 +516,6 @@ function checkAndExecuteBotTurn(room) {
 
     const roomCode = room.code;
     
-    // Clear outstanding timeout handles to regulate room sequence cycle rates
     if (botTimeouts[roomCode]) {
         clearTimeout(botTimeouts[roomCode]);
         botTimeouts[roomCode] = null;
@@ -483,7 +531,7 @@ function checkAndExecuteBotTurn(room) {
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
 
-        // --- 1. DEFENSIVE ROADBLOCKING STATE ---
+        // --- 1. DEFENSIVE DEFLECTION REGION ---
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => {
                 if (c.isJoker) return true;
@@ -507,7 +555,7 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        // --- 2. DYNAMIC CONTEXT-AWARE CONSOLIDATED RUN SEARCH ---
+        // --- 2. THE CONTEXTUAL POWERSET COMBO SCANNER ---
         let bestSequenceIndices = [];
         let bestJokerConfigs = [];
 
@@ -526,7 +574,6 @@ function checkAndExecuteBotTurn(room) {
                     let realCard = currentMover.hand[handIdx];
                     let cardCopy = { ...realCard };
 
-                    // Morphs the Joker dynamically based on sequential context requirements
                     if (cardCopy.isJoker) {
                         cardCopy.displaySuit = (i === 0 && currentOverride !== null) ? currentOverride : currentSuit;
                         cardCopy.displayValue = currentVal === 'Joker' ? '7' : currentVal;
@@ -536,9 +583,17 @@ function checkAndExecuteBotTurn(room) {
                         if (realCard.isJoker) {
                             validOrderConfigs.push({ index: handIdx, suit: cardCopy.displaySuit, value: cardCopy.displayValue });
                         }
-                        currentVal = cardCopy.displayValue;
-                        currentSuit = cardCopy.displaySuit;
-                        currentOverride = null;
+                        
+                        // SANDBOX TRAINER: Handle 2 -> Ace structural linkage properties cleanly
+                        if (currentVal === '2' && cardCopy.displayValue === 'A' && cardCopy.displaySuit === currentSuit) {
+                            currentVal = cardCopy.displayValue;
+                            currentSuit = cardCopy.displaySuit;
+                            currentOverride = null;
+                        } else {
+                            currentVal = cardCopy.displayValue;
+                            currentSuit = cardCopy.displaySuit;
+                            currentOverride = null;
+                        }
                     } else {
                         sequenceValid = false;
                         break;
@@ -571,7 +626,7 @@ function checkAndExecuteBotTurn(room) {
 
         runPowersetScanner(0, []);
 
-        // --- 3. FINALIZED EXECUTION ROUTINE ---
+        // --- 3. DISPATCH EXECUTOR ---
         if (bestSequenceIndices && bestSequenceIndices.length > 0) {
             if (currentMover.hand.length - bestSequenceIndices.length <= 1) {
                 currentMover.saidCard = true;
