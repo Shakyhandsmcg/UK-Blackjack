@@ -475,15 +475,19 @@ function checkAndExecuteBotTurn(room) {
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
 
-        currentMover.hand.forEach(c => {
-            if (c.isJoker) { c.displaySuit = activeSuit; c.displayValue = activeVal === 'Joker' ? '7' : activeVal; }
-        });
-
-        // 1. DEFENSIVE HANDLERS (Must answer pickup threats with 1 card only)
+        // --- 1. DEFENSIVE HANDLERS (Answering pickups safely with one card) ---
         if (room.activePickupCount > 0) {
-            let defenseIdx = currentMover.hand.findIndex(c => isPickupCard(c) || (c.displayValue === 'J' && ['♥','♦'].includes(c.displaySuit)));
+            let defenseIdx = currentMover.hand.findIndex(c => {
+                if (c.isJoker) return true;
+                return isPickupCard(c) || (c.displayValue === 'J' && ['♥','♦'].includes(c.displaySuit));
+            });
+
             if (defenseIdx > -1) {
                 let card = currentMover.hand[defenseIdx];
+                if (card.isJoker) {
+                    card.displaySuit = activeSuit;
+                    card.displayValue = activeVal === 'Joker' ? '7' : activeVal;
+                }
                 if (currentMover.hand.length === 2) currentMover.saidCard = true;
                 
                 currentMover.hand.splice(defenseIdx, 1);
@@ -495,13 +499,23 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        // 2. COMBINATORIAL MULTI-CARD CHAIN SEARCH
+        // --- 2. SAFE COMBINATORIAL RUN SCANNER ---
         function findBestCombo(hand) {
             let longestValidOrder = [];
             
             function combine(start, currentCombo) {
                 if (currentCombo.length > 0 && currentCombo.length <= 4) {
-                    let validOrder = getValidPermutation(currentCombo, room);
+                    // Create deep sandbox clones to isolate rule testing configurations
+                    let simulatedCombo = currentCombo.map(c => ({...c}));
+                    
+                    simulatedCombo.forEach(c => {
+                        if (c.isJoker) {
+                            c.displaySuit = activeSuit;
+                            c.displayValue = activeVal === 'Joker' ? '7' : activeVal;
+                        }
+                    });
+
+                    let validOrder = getValidPermutation(simulatedCombo, room);
                     if (validOrder && validOrder.length > longestValidOrder.length) {
                         longestValidOrder = validOrder;
                     }
@@ -514,22 +528,32 @@ function checkAndExecuteBotTurn(room) {
             }
             
             combine(0, []);
-            return longestValidOrder.length > 0 ? longestValidOrder : null;
+            return longestValidOrder;
         }
 
         let workingChainOrder = findBestCombo(currentMover.hand);
 
+        // --- 3. RUN COUPLING EXECUTION ---
         if (workingChainOrder && workingChainOrder.length > 0) {
             if (currentMover.hand.length - workingChainOrder.length <= 1) {
                 currentMover.saidCard = true;
             }
 
-            currentMover.hand = currentMover.hand.filter(handCard => 
-                !workingChainOrder.some(playedCard => playedCard === handCard)
-            );
+            let realCardsToPlay = [];
+            workingChainOrder.forEach(clonedCard => {
+                let realCardIdx = currentMover.hand.findIndex(hc => hc.suit === clonedCard.suit && hc.value === clonedCard.value);
+                if (realCardIdx > -1) {
+                    let realCard = currentMover.hand.splice(realCardIdx, 1)[0];
+                    if (realCard.isJoker) {
+                        realCard.displaySuit = clonedCard.displaySuit;
+                        realCard.displayValue = clonedCard.displayValue;
+                    }
+                    realCardsToPlay.push(realCard);
+                }
+            });
 
             room.activeSuitOverride = null;
-            executeChainActions(room, workingChainOrder, currentMover);
+            executeChainActions(room, realCardsToPlay, currentMover);
         } else {
             executeDrawAction(room, currentMover);
         }
