@@ -16,6 +16,9 @@ const rooms = {};
 const SUITS = ['♠', '♥', '♦', '♣'];
 const VALUES = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
+// Global timer map to prevent overlapping AI routines across game rooms
+const botTimeouts = {};
+
 function generateRoomCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
     let code = '';
@@ -111,7 +114,6 @@ function getValidPermutation(cards, room) {
 
 io.on('connection', (socket) => {
 
-    // RECONNECTION BRIDGE HANDSHAKE
     socket.on('attemptSessionRecovery', ({ token, roomCode }) => {
         if (!roomCode || !token) return;
         const code = roomCode.toUpperCase().trim();
@@ -463,9 +465,17 @@ function checkAndExecuteBotTurn(room) {
     let currentMover = room.players[room.currentPlayerIdx];
     if (!currentMover || !currentMover.isAI || currentMover.out) return;
 
+    const roomCode = room.code;
+    
+    // Clear any pending or overlapping timeouts immediately for this specific room
+    if (botTimeouts[roomCode]) {
+        clearTimeout(botTimeouts[roomCode]);
+        botTimeouts[roomCode] = null;
+    }
+
     const shiftingBotIdentityId = currentMover.id;
 
-    setTimeout(() => {
+    botTimeouts[roomCode] = setTimeout(() => {
         if (room.isGameOver) return;
         if (room.players[room.currentPlayerIdx].id !== shiftingBotIdentityId) return;
 
@@ -473,7 +483,7 @@ function checkAndExecuteBotTurn(room) {
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
 
-        // --- 1. DEFENSIVE HANDLERS (Must answer pickup threats with 1 card only) ---
+        // --- 1. DEFENSIVE HANDLING STATE ---
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => {
                 if (c.isJoker) return true;
@@ -497,72 +507,66 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        // --- 2. INDEX-BASED COMBINATORIAL RUN SCANNER ---
-        // We pass real array index positions instead of copies of the card objects
-        function findBestComboIndexSet(hand) {
-            let bestChainOrder = [];
-            
-            // Build an array of indices [0, 1, 2, ...] corresponding to the hand
+        // --- 2. THE INDEX-DRIVEN COMBINATORIAL VALIDATOR ---
+        function findBestComboIndexSequence(hand) {
+            let longestIndices = [];
             let indices = hand.map((_, idx) => idx);
 
-            function combine(start, currentComboIndices) {
-                if (currentComboIndices.length > 0 && currentComboIndices.length <= 4) {
+            function combine(start, currentCombo) {
+                if (currentCombo.length > 0 && currentCombo.length <= 4) {
+                    // Create deep clone templates inside the combinatorial sandbox
+                    let simulatedCards = currentCombo.map(idx => ({ ...hand[idx] }));
                     
-                    // Construct a simulated card chain using deep sandbox copies
-                    let simulatedCombo = currentComboIndices.map(originalIdx => ({
-                        ...hand[originalIdx]
-                    }));
-                    
-                    simulatedCombo.forEach(c => {
+                    simulatedCards.forEach(c => {
                         if (c.isJoker) {
                             c.displaySuit = activeSuit;
                             c.displayValue = activeVal === 'Joker' ? '7' : activeVal;
                         }
                     });
 
-                    // Test legality using your verified permutation sequencer
-                    let validOrder = getValidPermutation(simulatedCombo, room);
+                    // Test accuracy using your official validation rules
+                    let validPermutationOrder = getValidPermutation(simulatedCards, room);
                     
-                    if (validOrder && validOrder.length > bestChainOrder.length) {
-                        // Map the winning permutation back to the index order it belongs to
-                        let orderedIndices = [];
-                        validOrder.forEach(validCard => {
-                            let matchIdx = currentComboIndices.find(idx => 
-                                !orderedIndices.includes(idx) && 
-                                hand[idx].suit === validCard.suit && 
-                                hand[idx].value === validCard.value
+                    if (validPermutationOrder && validPermutationOrder.length > longestIndices.length) {
+                        // Align sequence items exactly back to their hand array position structures
+                        let temporaryHandIndices = [...currentCombo];
+                        let confirmedIndexChainOrder = [];
+                        
+                        for (let matchingCard of validPermutationOrder) {
+                            let foundHandIdx = temporaryHandIndices.find(idx => 
+                                hand[idx].suit === matchingCard.suit && 
+                                hand[idx].value === matchingCard.value
                             );
-                            if (matchIdx !== undefined) orderedIndices.push(matchIdx);
-                        });
-                        bestChainOrder = orderedIndices;
+                            if (foundHandIdx !== undefined) {
+                                confirmedIndexChainOrder.push(foundHandIdx);
+                                temporaryHandIndices = temporaryHandIndices.filter(idx => idx !== foundHandIdx);
+                            }
+                        }
+                        longestIndices = confirmedIndexChainOrder;
                     }
                 }
-                if (currentComboIndices.length >= 4) return; 
+                if (currentCombo.length >= 4) return;
                 
                 for (let i = start; i < indices.length; i++) {
-                    combine(i + 1, currentComboIndices.concat([indices[i]]));
+                    combine(i + 1, currentCombo.concat([indices[i]]));
                 }
             }
-            
+
             combine(0, []);
-            return bestChainOrder;
+            return longestIndices;
         }
 
-        let workingIndices = findBestComboIndexSet(currentMover.hand);
+        let workingIndices = findBestComboIndexSequence(currentMover.hand);
 
-        // --- 3. RUN COUPLING EXECUTION VIA SPLICING ---
+        // --- 3. SAFE EXTRACTION AND TURN RESOLUTION ---
         if (workingIndices && workingIndices.length > 0) {
             if (currentMover.hand.length - workingIndices.length <= 1) {
                 currentMover.saidCard = true;
             }
 
-            // Extract the cards out of the hand array based on matched slots
             let realCardsToPlay = [];
-            
-            workingIndices.forEach(originalSlotIdx => {
-                let targetCard = currentMover.hand[originalSlotIdx];
-                
-                // If it's a Joker, set its target lookups right before dropping it on stack
+            workingIndices.forEach(idx => {
+                let targetCard = currentMover.hand[idx];
                 if (targetCard.isJoker) {
                     targetCard.displaySuit = activeSuit;
                     targetCard.displayValue = activeVal === 'Joker' ? '7' : activeVal;
@@ -570,7 +574,7 @@ function checkAndExecuteBotTurn(room) {
                 realCardsToPlay.push(targetCard);
             });
 
-            // Re-assign hand filtering out elements that are reference-identical to items in realCardsToPlay
+            // Rebuild hand removing elements that are verified parts of realCardsToPlay
             currentMover.hand = currentMover.hand.filter(c => !realCardsToPlay.includes(c));
 
             room.activeSuitOverride = null;
