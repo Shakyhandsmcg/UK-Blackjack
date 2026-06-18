@@ -120,7 +120,7 @@ io.on('connection', (socket) => {
 
         const p = room.players.find(pl => pl.sessionToken === token);
         if (p) {
-            p.id = socket.id; // Hot-swap old dropped socket ID with new one
+            p.id = socket.id; 
             socket.join(code);
             socket.emit('sessionRecoverySuccess', { room, myId: socket.id });
             io.to(code).emit('gameStateSynced', room);
@@ -233,8 +233,6 @@ io.on('connection', (socket) => {
         if (!workingOrderChain) return socket.emit('errorMsg', 'Broken sequence link.');
         
         p.hand = p.hand.filter((_, idx) => !cardIndices.includes(idx));
-        
-        // Clear active overrides on explicit player card drops
         room.activeSuitOverride = null;
         executeChainActions(room, workingOrderChain, p);
     });
@@ -475,7 +473,7 @@ function checkAndExecuteBotTurn(room) {
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
 
-        // --- 1. DEFENSIVE HANDLERS (Answering pickups safely with one card) ---
+        // --- 1. DEFENSIVE HANDLERS (Must answer pickup threats with 1 card only) ---
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => {
                 if (c.isJoker) return true;
@@ -499,14 +497,21 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        // --- 2. SAFE COMBINATORIAL RUN SCANNER ---
-        function findBestCombo(hand) {
-            let longestValidOrder = [];
+        // --- 2. INDEX-BASED COMBINATORIAL RUN SCANNER ---
+        // We pass real array index positions instead of copies of the card objects
+        function findBestComboIndexSet(hand) {
+            let bestChainOrder = [];
             
-            function combine(start, currentCombo) {
-                if (currentCombo.length > 0 && currentCombo.length <= 4) {
-                    // Create deep sandbox clones to isolate rule testing configurations
-                    let simulatedCombo = currentCombo.map(c => ({...c}));
+            // Build an array of indices [0, 1, 2, ...] corresponding to the hand
+            let indices = hand.map((_, idx) => idx);
+
+            function combine(start, currentComboIndices) {
+                if (currentComboIndices.length > 0 && currentComboIndices.length <= 4) {
+                    
+                    // Construct a simulated card chain using deep sandbox copies
+                    let simulatedCombo = currentComboIndices.map(originalIdx => ({
+                        ...hand[originalIdx]
+                    }));
                     
                     simulatedCombo.forEach(c => {
                         if (c.isJoker) {
@@ -515,42 +520,58 @@ function checkAndExecuteBotTurn(room) {
                         }
                     });
 
+                    // Test legality using your verified permutation sequencer
                     let validOrder = getValidPermutation(simulatedCombo, room);
-                    if (validOrder && validOrder.length > longestValidOrder.length) {
-                        longestValidOrder = validOrder;
+                    
+                    if (validOrder && validOrder.length > bestChainOrder.length) {
+                        // Map the winning permutation back to the index order it belongs to
+                        let orderedIndices = [];
+                        validOrder.forEach(validCard => {
+                            let matchIdx = currentComboIndices.find(idx => 
+                                !orderedIndices.includes(idx) && 
+                                hand[idx].suit === validCard.suit && 
+                                hand[idx].value === validCard.value
+                            );
+                            if (matchIdx !== undefined) orderedIndices.push(matchIdx);
+                        });
+                        bestChainOrder = orderedIndices;
                     }
                 }
-                if (currentCombo.length >= 4) return; 
+                if (currentComboIndices.length >= 4) return; 
                 
-                for (let i = start; i < hand.length; i++) {
-                    combine(i + 1, currentCombo.concat([hand[i]]));
+                for (let i = start; i < indices.length; i++) {
+                    combine(i + 1, currentComboIndices.concat([indices[i]]));
                 }
             }
             
             combine(0, []);
-            return longestValidOrder;
+            return bestChainOrder;
         }
 
-        let workingChainOrder = findBestCombo(currentMover.hand);
+        let workingIndices = findBestComboIndexSet(currentMover.hand);
 
-        // --- 3. RUN COUPLING EXECUTION ---
-        if (workingChainOrder && workingChainOrder.length > 0) {
-            if (currentMover.hand.length - workingChainOrder.length <= 1) {
+        // --- 3. RUN COUPLING EXECUTION VIA SPLICING ---
+        if (workingIndices && workingIndices.length > 0) {
+            if (currentMover.hand.length - workingIndices.length <= 1) {
                 currentMover.saidCard = true;
             }
 
+            // Extract the cards out of the hand array based on matched slots
             let realCardsToPlay = [];
-            workingChainOrder.forEach(clonedCard => {
-                let realCardIdx = currentMover.hand.findIndex(hc => hc.suit === clonedCard.suit && hc.value === clonedCard.value);
-                if (realCardIdx > -1) {
-                    let realCard = currentMover.hand.splice(realCardIdx, 1)[0];
-                    if (realCard.isJoker) {
-                        realCard.displaySuit = clonedCard.displaySuit;
-                        realCard.displayValue = clonedCard.displayValue;
-                    }
-                    realCardsToPlay.push(realCard);
+            
+            workingIndices.forEach(originalSlotIdx => {
+                let targetCard = currentMover.hand[originalSlotIdx];
+                
+                // If it's a Joker, set its target lookups right before dropping it on stack
+                if (targetCard.isJoker) {
+                    targetCard.displaySuit = activeSuit;
+                    targetCard.displayValue = activeVal === 'Joker' ? '7' : activeVal;
                 }
+                realCardsToPlay.push(targetCard);
             });
+
+            // Re-assign hand filtering out elements that are reference-identical to items in realCardsToPlay
+            currentMover.hand = currentMover.hand.filter(c => !realCardsToPlay.includes(c));
 
             room.activeSuitOverride = null;
             executeChainActions(room, realCardsToPlay, currentMover);
