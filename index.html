@@ -56,6 +56,7 @@
             justify-content: center; 
             gap: 15px; 
             width: 100%;
+            padding-bottom: 20px; /* Spacer patch to accommodate owner labels */
         }
         .stack-history { 
             display: flex; 
@@ -63,7 +64,7 @@
             overflow-x: auto;
             scroll-behavior: smooth;
             max-width: calc(100% - var(--card-width) - 40px);
-            padding-bottom: 5px;
+            padding-bottom: 20px;
         }
         .stack-history::-webkit-scrollbar { height: 4px; }
         .stack-history::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
@@ -75,7 +76,7 @@
             .stack-history .card-wrapper:nth-last-child(n+4) { display: none; }
         }
 
-        .card-wrapper { display: flex; flex-direction: column; align-items: center; }
+        .card-wrapper { display: flex; flex-direction: column; align-items: center; position: relative; }
         .card-owner-line { width: 100%; height: 3px; margin-top: 6px; position: relative; border-radius: 2px; }
         .card-owner-name { font-size: 11px; background: #143d22; padding: 0 4px; position: absolute; top: -7px; left: 50%; transform: translateX(-50%); white-space: nowrap; border-radius: 3px; font-weight: bold; }
         
@@ -109,6 +110,11 @@
         .joker-watermark { color: #7b1fa2; border: 1px dashed #7b1fa2; padding: 2px 4px; border-radius: 4px; background: rgba(255,255,255,0.8); }
         .ace-ghost-watermark { font-size: 32px; color: rgba(0, 0, 0, 0.12); font-weight: normal; }
         .joker-ghost-watermark { font-size: 11px; font-weight: bold; color: rgba(123, 31, 162, 0.18); border: 1px dashed rgba(123, 31, 162, 0.25); padding: 1px 3px; border-radius: 4px; }
+
+        /* Faded Custom Display Layout Properties */
+        .faded-out-corners { opacity: 0.25 !important; filter: grayscale(100%); }
+        .vibrant-colored-center { font-size: 2.8rem !important; transform: scale(1.25); pointer-events: none; }
+        .spectator-hud-alert-tag { background: #00e5ff; color: #143d22; font-size: 12px; padding: 6px 12px; border-radius: 4px; font-weight: bold; margin-bottom: 12px; border: 1px solid #fff; text-align: center; }
 
         .player-section { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
         .player-section.active { border: 2px solid #4caf50; background: rgba(76, 175, 80, 0.12); }
@@ -166,6 +172,7 @@
 </div>
 
 <div id="game-container">
+    <div id="spectator-mode-hud-alert" class="spectator-hud-alert-tag" style="display: none;">👁️ SPECTATOR MODE ACTIVE: Hand details of remaining active players revealed.</div>
     <div class="status-bar" id="status-text">Connecting to room engine...</div>
     
     <div class="header-action-row">
@@ -298,7 +305,6 @@ function quitGameActionConfirm() {
     }
 }
 
-// CORRECTION: Rebuilt utilizing child text elements and appends to support select dropdown configurations
 function displayLobby(room) {
     currentRoom = room;
     document.getElementById('host-panel').style.display = 'none';
@@ -459,6 +465,12 @@ function updateGameplayUI(room) {
     const localUserInsidePlayers = room.players.find(pl => pl.sessionToken === sessionToken);
     const isMyTurnRightNow = localUserInsidePlayers && room.players[room.currentPlayerIdx]?.sessionToken === sessionToken;
 
+    // SPECTATOR HUD LOGIC GATEWAY: If user is safely out, activate full spectator panel notification
+    if (localUserInsidePlayers) {
+        let isSafeSpectator = (localUserInsidePlayers.out && !localUserInsidePlayers.finishedOnPickup);
+        document.getElementById('spectator-mode-hud-alert').style.display = isSafeSpectator ? 'block' : 'none';
+    }
+
     let statusText = room.isGameOver ? "Match Finished!" : `Turn: ${activePlayer.name}`;
     if (!room.isGameOver && room.activePickupCount > 0) statusText += ` | ⚠️ Next Draws (${room.activePickupCount})`;
     if (!room.isGameOver && room.activeSuitOverride) statusText += ` | Suit Called: ${room.activeSuitOverride}`;
@@ -494,11 +506,12 @@ function updateGameplayUI(room) {
         let wrap = document.createElement('div'); wrap.className = 'card-wrapper';
         let hasOverride = (i === room.playedStack.length - 2 && room.activeSuitOverride !== null);
         wrap.appendChild(renderCardGraphic(cData, i, true, false, hasOverride ? room.activeSuitOverride : null));
-        if (i === start || room.playedStack[i-1].playedBy !== cData.playedBy) {
-            let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = cData.playerColor;
-            let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = cData.playerColor; tag.innerText = cData.playedBy;
-            ln.appendChild(tag); wrap.appendChild(ln);
-        }
+        
+        // LABEL INJECTION SYSTEM: Appends user labels below EVERY single historical item in sequence arrays
+        let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = cData.playerColor;
+        let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = cData.playerColor; tag.innerText = cData.playedBy;
+        ln.appendChild(tag); wrap.appendChild(ln);
+        
         hist.appendChild(wrap);
     }
 
@@ -539,7 +552,8 @@ function updateGameplayUI(room) {
         let handDiv = document.createElement('div'); handDiv.className = 'hand';
         if (p.hand && Array.isArray(p.hand)) {
             p.hand.forEach((card, cIdx) => {
-                let revealFace = isMe && !p.out;
+                // SPECTATOR DISCOVERY GATEWAY: Reveal cards if it's your own hand OR if the card payload has data populated (Safe Spectators)
+                let revealFace = (isMe && !p.out) || (card.displayValue !== undefined);
                 let clickable = isActive && isMe && !p.out;
                 handDiv.appendChild(renderCardGraphic(card, cIdx, revealFace, clickable, null));
             });
@@ -575,8 +589,11 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
         finalValue = localJokerConfig.value;
         finalSuit = localJokerConfig.suit;
     }
-    if (card.displayValue === 'A' && activeSuitOverride !== null) {
-        finalSuit = activeSuitOverride;
+
+    // CHECK FOR UN-NEUTRALIZED WILD ACE: Activate custom visual states
+    let isWildAceWithOverride = (card.displayValue === 'A' && (activeSuitOverride !== null || card.suitOverrideActive));
+    if (isWildAceWithOverride) {
+        finalSuit = activeSuitOverride || card.displaySuit;
     }
 
     let isRed = finalSuit === '♥' || finalSuit === '♦';
@@ -588,19 +605,41 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
         let bd = document.createElement('div'); bd.className = 'badge'; bd.innerText = sel.order; div.appendChild(bd);
     }
 
-    let top = document.createElement('div'); top.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); div.appendChild(top);
+    // Header Rendering Node
+    let top = document.createElement('div'); 
+    top.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); 
+    if (isWildAceWithOverride) top.className = "card-corner-wrapper faded-out-corners"; // Suppress corners
+    div.appendChild(top);
     
+    // Core Layout Watermark Center Engine
     if (isOriginallyJoker) {
         if (finalValue === 'Joker') {
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
         } else {
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-ghost-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
         }
+    } else if (isWildAceWithOverride) {
+        // Render large vibrant called suit icon cleanly centered on card face body
+        let centerSuit = document.createElement('div'); 
+        centerSuit.className = 'card-watermark vibrant-colored-center'; 
+        centerSuit.innerText = finalSuit; 
+        div.appendChild(centerSuit);
+
+        // Render subtle background reference to original suit selection parameters
+        let ghost = document.createElement('div'); 
+        ghost.className = 'card-watermark ace-ghost-watermark'; 
+        ghost.innerText = card.originalSuit || card.displaySuit; 
+        div.appendChild(ghost);
     } else if (card.displayValue === 'A' && activeSuitOverride !== null) {
         let ghost = document.createElement('div'); ghost.className = 'card-watermark ace-ghost-watermark'; ghost.innerText = card.displaySuit; div.appendChild(ghost);
     }
     
-    let bot = document.createElement('div'); bot.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); bot.style.textAlign = 'right'; div.appendChild(bot);
+    // Footer Rendering Node
+    let bot = document.createElement('div'); 
+    bot.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); 
+    bot.style.textAlign = 'right'; 
+    if (isWildAceWithOverride) bot.className = "faded-out-corners"; // Suppress corners
+    div.appendChild(bot);
 
     if (interactive) {
         div.onclick = () => toggleSelectClient(index, isOriginallyJoker, localJokerConfig !== undefined);
@@ -680,7 +719,7 @@ function openRulesPopUp() {
     container.innerHTML = `
         <h3>🎮 The Basics</h3>
         <p><b>Deal:</b> Start with 7 cards each. Match top card by Suit or Value.</p>
-        <p><b>Runs:</b> Play multiple cards in a chain if they match suit or number sequentially (e.g. 4/5/6 of Hearts).</p>
+        <p><b>Runs:</b> Play multiple cards in a chain if they match value or increase/decrease consecutively by exactly 1 rank within the same suit (e.g., 7/8/9 of Spades). Loose suit dumping is forbidden.</p>
         <p><b>Draw:</b> If you can't play (or choose not to), draw 1 card and pass.</p>
 
         <h3>🚀 Winning & "Saying Card"</h3>
@@ -688,9 +727,9 @@ function openRulesPopUp() {
         <p><b>Missed it?</b> If it comes back to your turn and you didn't say it, you can't win yet.</p>
         <p><b>Reset:</b> If you say it but can't finish on your turn, you must say it again on an opponent's turn.</p>
 
-        <h3>⚔️ Attack Cards (They Stack!)</h3>
+        <h3>⚔️ Attack Cards (Top Card Only Active)</h3>
         <ul>
-            <li><b>Any 2:</b> Next player picks up 2 cards.</li>
+            <li><b>Any 2:</b> Next player picks up 2 cards. (Canceled if buried underneath an Ace in a run).</li>
             <li><b>♠/♣ Jack (Black Jacks):</b> Next player picks up 4 cards.</li>
             <li><b>Chain the Pain:</b> Stack 2s and Black Jacks together to pass an even bigger penalty pool down the line!</li>
         </ul>
@@ -698,10 +737,10 @@ function openRulesPopUp() {
         <h3>🛡️ Defense & Action Cards</h3>
         <ul>
             <li><b>♥/♦ Jack (Red Jacks):</b> Instantly cancels an active penalty pool back to 0.</li>
-            <li><b>Ace (Any Suit):</b> Wildcard! Plays on anything. You call a new suit to follow.</li>
+            <li><b>Ace (Any Suit):</b> Wildcard! Plays on anything. If it remains on top at the end of the turn, you call a new suit.</li>
             <li><b>Queen (Any Suit):</b> Universal Bridge. Play any card on top of a Queen.</li>
-            <li><b>King (Any Suit):</b> Reverses turn order direction. (In 2-player games, it's your go again instantly).</li>
-            <li><b>Number 8:</b> Next player skips a go. Multiple 8s compound to skip multiple targets.</li>
+            <li><b>King (Any Suit):</b> Reverses turn order direction. Only active if it finishes on top.</li>
+            <li><b>Number 8:</b> Next player skips a go. Only triggers if it sits on top at turn end.</li>
             <li><b>Joker:</b> Fully wild—morphs into any identity configuration you choose.</li>
         </ul>
 
