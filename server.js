@@ -195,24 +195,9 @@ io.on('connection', (socket) => {
             sessionToken: `bot-tok-${Math.random()}`,
             name: `CPU Bot ${botIndex}`,
             hand: [], saidCard: false, out: false, rank: null, color: botColor, isHost: false, isAI: true, finishedOnPickup: false,
-            botDifficulty: 'medium', // Fallback default
             scores: { first: 0, second: 0, third: 0, fourth: 0 }
         });
         io.to(roomCode).emit('roomUpdated', room);
-    });
-
-    socket.on('updateBotDifficultyServer', ({ roomCode, botId, difficulty }) => {
-        const room = rooms[roomCode];
-        if (!room) return;
-        
-        const sender = room.players.find(p => p.id === socket.id);
-        if (!sender || !sender.isHost) return;
-
-        const targetBot = room.players.find(p => p.id === botId);
-        if (targetBot && targetBot.isAI) {
-            targetBot.botDifficulty = difficulty;
-            io.to(roomCode).emit('roomUpdated', room);
-        }
     });
 
     socket.on('startGameServer', ({ roomCode }) => {
@@ -249,6 +234,7 @@ io.on('connection', (socket) => {
         
         p.hand = p.hand.filter((_, idx) => !cardIndices.includes(idx));
         
+        // Clear active overrides on explicit player card drops
         room.activeSuitOverride = null;
         executeChainActions(room, workingOrderChain, p);
     });
@@ -389,6 +375,7 @@ function executeDrawAction(room, player) {
 function drawCards(room, player, count) {
     for (let i = 0; i < count; i++) {
         if (room.deck.length === 0) {
+            // Infinite Deck Recycling fix: if playedStack runs low, manufacture a fresh baseline card
             if (room.playedStack.length <= 1) {
                 let freshDeckFallback = createFreshDeck();
                 shuffle(freshDeckFallback);
@@ -473,24 +460,25 @@ function checkAndExecuteBotTurn(room) {
     if (!currentMover || !currentMover.isAI || currentMover.out) return;
 
     setTimeout(() => {
-        if (room.isGameOver) return; 
+        if (room.isGameOver) return; // Defensive sanity check
         let currentTop = room.playedStack[room.playedStack.length - 1];
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
-        let difficulty = currentMover.botDifficulty || 'medium';
 
         currentMover.hand.forEach(c => {
             if (c.isJoker) { c.displaySuit = activeSuit; c.displayValue = activeVal === 'Joker' ? '7' : activeVal; }
         });
 
-        // 1. DEFENSE HANDLING
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => isPickupCard(c) || (c.displayValue === 'J' && ['♥','♦'].includes(c.displaySuit)));
             if (defenseIdx > -1) {
                 let card = currentMover.hand[defenseIdx];
+                
+                // Track announcement status after splice calculation safely
                 if (currentMover.hand.length === 2) currentMover.saidCard = true;
+                
                 currentMover.hand.splice(defenseIdx, 1);
-                room.activeSuitOverride = null;
+                room.activeSuitOverride = null; // Clear override flag
                 executeChainActions(room, [card], currentMover);
             } else {
                 executeDrawAction(room, currentMover);
@@ -498,54 +486,18 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        // 2. DETERMINISTIC STRATEGY TREE
-        let bestChain = null;
-
-        if (difficulty === 'easy') {
-            for (let i = 0; i < currentMover.hand.length; i++) {
-                let card = currentMover.hand[i];
-                let order = getValidPermutation([card], room);
-                if (order) { bestChain = order; break; }
-            }
-        } else {
-            let maxChainLength = 0;
-            const cardsInHand = currentMover.hand;
-            const totalSubsets = 1 << cardsInHand.length; 
-
-            for (let i = 1; i < totalSubsets; i++) {
-                let subset = [];
-                for (let j = 0; j < cardsInHand.length; j++) {
-                    if ((i & (1 << j)) !== 0) subset.push(cardsInHand[j]);
-                }
-
-                if (subset.length <= maxChainLength) continue;
-
-                let validOrder = getValidPermutation(subset, room);
-                if (validOrder) {
-                    bestChain = validOrder;
-                    maxChainLength = subset.length;
-                }
-            }
-
-            if (difficulty === 'medium' && bestChain && bestChain.length > 2) {
-                if (Math.random() < 0.5) {
-                    bestChain = bestChain.slice(0, Math.floor(bestChain.length / 2) + 1);
-                }
-            }
+        let workingSingleCard = null;
+        for (let i = 0; i < currentMover.hand.length; i++) {
+            let card = currentMover.hand[i];
+            let order = getValidPermutation([card], room);
+            if (order) { workingSingleCard = card; break; }
         }
 
-        // 3. ACTIONS COMMIT
-        if (bestChain && bestChain.length > 0) {
-            if (currentMover.hand.length - bestChain.length === 1) {
-                currentMover.saidCard = true;
-            }
-
-            currentMover.hand = currentMover.hand.filter(handCard => 
-                !bestChain.some(playedCard => playedCard.suit === handCard.suit && playedCard.value === handCard.value)
-            );
-
-            room.activeSuitOverride = null;
-            executeChainActions(room, bestChain, currentMover);
+        if (workingSingleCard) {
+            if (currentMover.hand.length === 2) currentMover.saidCard = true;
+            currentMover.hand = currentMover.hand.filter(c => c !== workingSingleCard);
+            room.activeSuitOverride = null; // Clear override flag
+            executeChainActions(room, [workingSingleCard], currentMover);
         } else {
             executeDrawAction(room, currentMover);
         }
