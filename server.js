@@ -375,7 +375,6 @@ function executeDrawAction(room, player) {
 function drawCards(room, player, count) {
     for (let i = 0; i < count; i++) {
         if (room.deck.length === 0) {
-            // Recovers deck from discarded playedStack items
             if (room.playedStack.length <= 1) {
                 let freshDeckFallback = createFreshDeck();
                 shuffle(freshDeckFallback);
@@ -383,7 +382,6 @@ function drawCards(room, player, count) {
             } else {
                 let top = room.playedStack.pop(); 
                 room.deck = [...room.playedStack];
-                // Explicitly wash active state configurations off played Jokers returning to back deck
                 room.deck.forEach(c => { 
                     if(c.isJoker) { 
                         c.displayValue = '🃏'; 
@@ -467,12 +465,10 @@ function checkAndExecuteBotTurn(room) {
     let currentMover = room.players[room.currentPlayerIdx];
     if (!currentMover || !currentMover.isAI || currentMover.out) return;
 
-    // Capture precise snapshot of bot identity to protect loop execution scoping
     const shiftingBotIdentityId = currentMover.id;
 
     setTimeout(() => {
         if (room.isGameOver) return;
-        // Verify identity execution window hasn't shifted turn positions
         if (room.players[room.currentPlayerIdx].id !== shiftingBotIdentityId) return;
 
         let currentTop = room.playedStack[room.playedStack.length - 1];
@@ -483,6 +479,7 @@ function checkAndExecuteBotTurn(room) {
             if (c.isJoker) { c.displaySuit = activeSuit; c.displayValue = activeVal === 'Joker' ? '7' : activeVal; }
         });
 
+        // 1. DEFENSIVE HANDLERS (Must answer pickup threats with 1 card only)
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => isPickupCard(c) || (c.displayValue === 'J' && ['♥','♦'].includes(c.displaySuit)));
             if (defenseIdx > -1) {
@@ -498,18 +495,41 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        let workingSingleCard = null;
-        for (let i = 0; i < currentMover.hand.length; i++) {
-            let card = currentMover.hand[i];
-            let order = getValidPermutation([card], room);
-            if (order) { workingSingleCard = card; break; }
+        // 2. COMBINATORIAL MULTI-CARD CHAIN SEARCH
+        function findBestCombo(hand) {
+            let longestValidOrder = [];
+            
+            function combine(start, currentCombo) {
+                if (currentCombo.length > 0 && currentCombo.length <= 4) {
+                    let validOrder = getValidPermutation(currentCombo, room);
+                    if (validOrder && validOrder.length > longestValidOrder.length) {
+                        longestValidOrder = validOrder;
+                    }
+                }
+                if (currentCombo.length >= 4) return; 
+                
+                for (let i = start; i < hand.length; i++) {
+                    combine(i + 1, currentCombo.concat([hand[i]]));
+                }
+            }
+            
+            combine(0, []);
+            return longestValidOrder.length > 0 ? longestValidOrder : null;
         }
 
-        if (workingSingleCard) {
-            if (currentMover.hand.length === 2) currentMover.saidCard = true;
-            currentMover.hand = currentMover.hand.filter(c => c !== workingSingleCard);
+        let workingChainOrder = findBestCombo(currentMover.hand);
+
+        if (workingChainOrder && workingChainOrder.length > 0) {
+            if (currentMover.hand.length - workingChainOrder.length <= 1) {
+                currentMover.saidCard = true;
+            }
+
+            currentMover.hand = currentMover.hand.filter(handCard => 
+                !workingChainOrder.some(playedCard => playedCard === handCard)
+            );
+
             room.activeSuitOverride = null;
-            executeChainActions(room, [workingSingleCard], currentMover);
+            executeChainActions(room, workingChainOrder, currentMover);
         } else {
             executeDrawAction(room, currentMover);
         }
