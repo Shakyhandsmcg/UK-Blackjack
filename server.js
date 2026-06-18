@@ -467,7 +467,7 @@ function checkAndExecuteBotTurn(room) {
 
     const roomCode = room.code;
     
-    // Clear any pending or overlapping timeouts immediately for this specific room
+    // Clear outstanding timeout handles to regulate room sequence cycle rates
     if (botTimeouts[roomCode]) {
         clearTimeout(botTimeouts[roomCode]);
         botTimeouts[roomCode] = null;
@@ -483,7 +483,7 @@ function checkAndExecuteBotTurn(room) {
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
 
-        // --- 1. DEFENSIVE HANDLING STATE ---
+        // --- 1. DEFENSIVE ROADBLOCKING STATE ---
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => {
                 if (c.isJoker) return true;
@@ -507,75 +507,86 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        // --- 2. THE INDEX-DRIVEN COMBINATORIAL VALIDATOR ---
-        function findBestComboIndexSequence(hand) {
-            let longestIndices = [];
-            let indices = hand.map((_, idx) => idx);
+        // --- 2. DYNAMIC CONTEXT-AWARE CONSOLIDATED RUN SEARCH ---
+        let bestSequenceIndices = [];
+        let bestJokerConfigs = [];
 
-            function combine(start, currentCombo) {
-                if (currentCombo.length > 0 && currentCombo.length <= 4) {
-                    // Create deep clone templates inside the combinatorial sandbox
-                    let simulatedCards = currentCombo.map(idx => ({ ...hand[idx] }));
-                    
-                    simulatedCards.forEach(c => {
-                        if (c.isJoker) {
-                            c.displaySuit = activeSuit;
-                            c.displayValue = activeVal === 'Joker' ? '7' : activeVal;
-                        }
-                    });
+        function evaluateIndexCombo(comboIndices) {
+            let orders = permute(comboIndices);
 
-                    // Test accuracy using your official validation rules
-                    let validPermutationOrder = getValidPermutation(simulatedCards, room);
-                    
-                    if (validPermutationOrder && validPermutationOrder.length > longestIndices.length) {
-                        // Align sequence items exactly back to their hand array position structures
-                        let temporaryHandIndices = [...currentCombo];
-                        let confirmedIndexChainOrder = [];
-                        
-                        for (let matchingCard of validPermutationOrder) {
-                            let foundHandIdx = temporaryHandIndices.find(idx => 
-                                hand[idx].suit === matchingCard.suit && 
-                                hand[idx].value === matchingCard.value
-                            );
-                            if (foundHandIdx !== undefined) {
-                                confirmedIndexChainOrder.push(foundHandIdx);
-                                temporaryHandIndices = temporaryHandIndices.filter(idx => idx !== foundHandIdx);
-                            }
+            for (let order of orders) {
+                let currentSuit = activeSuit;
+                let currentVal = activeVal;
+                let currentOverride = room.activeSuitOverride;
+                let validOrderConfigs = [];
+                let sequenceValid = true;
+
+                for (let i = 0; i < order.length; i++) {
+                    let handIdx = order[i];
+                    let realCard = currentMover.hand[handIdx];
+                    let cardCopy = { ...realCard };
+
+                    // Morphs the Joker dynamically based on sequential context requirements
+                    if (cardCopy.isJoker) {
+                        cardCopy.displaySuit = (i === 0 && currentOverride !== null) ? currentOverride : currentSuit;
+                        cardCopy.displayValue = currentVal === 'Joker' ? '7' : currentVal;
+                    }
+
+                    if (isValidStep(cardCopy, currentVal, currentSuit, currentOverride, i === 0)) {
+                        if (realCard.isJoker) {
+                            validOrderConfigs.push({ index: handIdx, suit: cardCopy.displaySuit, value: cardCopy.displayValue });
                         }
-                        longestIndices = confirmedIndexChainOrder;
+                        currentVal = cardCopy.displayValue;
+                        currentSuit = cardCopy.displaySuit;
+                        currentOverride = null;
+                    } else {
+                        sequenceValid = false;
+                        break;
                     }
                 }
-                if (currentCombo.length >= 4) return;
-                
-                for (let i = start; i < indices.length; i++) {
-                    combine(i + 1, currentCombo.concat([indices[i]]));
+
+                if (sequenceValid) {
+                    return { indexOrder: order, jokerConfigs: validOrderConfigs };
                 }
             }
-
-            combine(0, []);
-            return longestIndices;
+            return null;
         }
 
-        let workingIndices = findBestComboIndexSequence(currentMover.hand);
+        let handIndices = currentMover.hand.map((_, idx) => idx);
+        
+        function runPowersetScanner(start, currentCombo) {
+            if (currentCombo.length > 0 && currentCombo.length <= 4) {
+                let result = evaluateIndexCombo(currentCombo);
+                if (result && result.indexOrder.length > bestSequenceIndices.length) {
+                    bestSequenceIndices = result.indexOrder;
+                    bestJokerConfigs = result.jokerConfigs;
+                }
+            }
+            if (currentCombo.length >= 4) return;
 
-        // --- 3. SAFE EXTRACTION AND TURN RESOLUTION ---
-        if (workingIndices && workingIndices.length > 0) {
-            if (currentMover.hand.length - workingIndices.length <= 1) {
+            for (let i = start; i < handIndices.length; i++) {
+                runPowersetScanner(i + 1, currentCombo.concat([handIndices[i]]));
+            }
+        }
+
+        runPowersetScanner(0, []);
+
+        // --- 3. FINALIZED EXECUTION ROUTINE ---
+        if (bestSequenceIndices && bestSequenceIndices.length > 0) {
+            if (currentMover.hand.length - bestSequenceIndices.length <= 1) {
                 currentMover.saidCard = true;
             }
 
-            let realCardsToPlay = [];
-            workingIndices.forEach(idx => {
-                let targetCard = currentMover.hand[idx];
-                if (targetCard.isJoker) {
-                    targetCard.displaySuit = activeSuit;
-                    targetCard.displayValue = activeVal === 'Joker' ? '7' : activeVal;
+            bestJokerConfigs.forEach(conf => {
+                let jCard = currentMover.hand[conf.index];
+                if (jCard) {
+                    jCard.displaySuit = conf.suit;
+                    jCard.displayValue = conf.value;
                 }
-                realCardsToPlay.push(targetCard);
             });
 
-            // Rebuild hand removing elements that are verified parts of realCardsToPlay
-            currentMover.hand = currentMover.hand.filter(c => !realCardsToPlay.includes(c));
+            let realCardsToPlay = bestSequenceIndices.map(idx => currentMover.hand[idx]);
+            currentMover.hand = currentMover.hand.filter((_, idx) => !bestSequenceIndices.includes(idx));
 
             room.activeSuitOverride = null;
             executeChainActions(room, realCardsToPlay, currentMover);
