@@ -375,7 +375,7 @@ function executeDrawAction(room, player) {
 function drawCards(room, player, count) {
     for (let i = 0; i < count; i++) {
         if (room.deck.length === 0) {
-            // Infinite Deck Recycling fix: if playedStack runs low, manufacture a fresh baseline card
+            // Recovers deck from discarded playedStack items
             if (room.playedStack.length <= 1) {
                 let freshDeckFallback = createFreshDeck();
                 shuffle(freshDeckFallback);
@@ -383,7 +383,15 @@ function drawCards(room, player, count) {
             } else {
                 let top = room.playedStack.pop(); 
                 room.deck = [...room.playedStack];
-                room.deck.forEach(c => { if(c.isJoker) { c.displayValue = '🃏'; c.displaySuit = '🃏'; } });
+                // Explicitly wash active state configurations off played Jokers returning to back deck
+                room.deck.forEach(c => { 
+                    if(c.isJoker) { 
+                        c.displayValue = '🃏'; 
+                        c.displaySuit = '🃏'; 
+                        c.suit = 'Joker';
+                        c.value = 'Joker';
+                    } 
+                });
                 shuffle(room.deck); 
                 room.playedStack = [top];
             }
@@ -459,8 +467,14 @@ function checkAndExecuteBotTurn(room) {
     let currentMover = room.players[room.currentPlayerIdx];
     if (!currentMover || !currentMover.isAI || currentMover.out) return;
 
+    // Capture precise snapshot of bot identity to protect loop execution scoping
+    const shiftingBotIdentityId = currentMover.id;
+
     setTimeout(() => {
-        if (room.isGameOver) return; // Defensive sanity check
+        if (room.isGameOver) return;
+        // Verify identity execution window hasn't shifted turn positions
+        if (room.players[room.currentPlayerIdx].id !== shiftingBotIdentityId) return;
+
         let currentTop = room.playedStack[room.playedStack.length - 1];
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
@@ -473,12 +487,10 @@ function checkAndExecuteBotTurn(room) {
             let defenseIdx = currentMover.hand.findIndex(c => isPickupCard(c) || (c.displayValue === 'J' && ['♥','♦'].includes(c.displaySuit)));
             if (defenseIdx > -1) {
                 let card = currentMover.hand[defenseIdx];
-                
-                // Track announcement status after splice calculation safely
                 if (currentMover.hand.length === 2) currentMover.saidCard = true;
                 
                 currentMover.hand.splice(defenseIdx, 1);
-                room.activeSuitOverride = null; // Clear override flag
+                room.activeSuitOverride = null;
                 executeChainActions(room, [card], currentMover);
             } else {
                 executeDrawAction(room, currentMover);
@@ -496,7 +508,7 @@ function checkAndExecuteBotTurn(room) {
         if (workingSingleCard) {
             if (currentMover.hand.length === 2) currentMover.saidCard = true;
             currentMover.hand = currentMover.hand.filter(c => c !== workingSingleCard);
-            room.activeSuitOverride = null; // Clear override flag
+            room.activeSuitOverride = null;
             executeChainActions(room, [workingSingleCard], currentMover);
         } else {
             executeDrawAction(room, currentMover);
