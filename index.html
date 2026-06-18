@@ -56,7 +56,7 @@
             justify-content: center; 
             gap: 15px; 
             width: 100%;
-            padding-bottom: 20px; /* Spacer patch to accommodate owner labels */
+            padding-bottom: 20px;
         }
         .stack-history { 
             display: flex; 
@@ -80,7 +80,6 @@
         .card-owner-line { width: 100%; height: 3px; margin-top: 6px; position: relative; border-radius: 2px; }
         .card-owner-name { font-size: 11px; background: #143d22; padding: 0 4px; position: absolute; top: -7px; left: 50%; transform: translateX(-50%); white-space: nowrap; border-radius: 3px; font-weight: bold; }
         
-        /* Mobile Touch-Grab Fix */
         .card { 
             width: var(--card-width); 
             height: var(--card-height); 
@@ -97,8 +96,6 @@
             box-shadow: 0 4px 8px rgba(0,0,0,0.4); 
             font-weight: bold; 
             font-size: 1.2em;
-            -webkit-user-select: none; 
-            -ms-user-select: none;     
             user-select: none;         
         }
         .card.red { color: #d32f2f; }
@@ -111,9 +108,6 @@
         .ace-ghost-watermark { font-size: 32px; color: rgba(0, 0, 0, 0.12); font-weight: normal; }
         .joker-ghost-watermark { font-size: 11px; font-weight: bold; color: rgba(123, 31, 162, 0.18); border: 1px dashed rgba(123, 31, 162, 0.25); padding: 1px 3px; border-radius: 4px; }
 
-        /* Faded Custom Display Layout Properties */
-        .faded-out-corners { opacity: 0.25 !important; filter: grayscale(100%); }
-        .vibrant-colored-center { font-size: 2.8rem !important; transform: scale(1.25); pointer-events: none; }
         .spectator-hud-alert-tag { background: #00e5ff; color: #143d22; font-size: 12px; padding: 6px 12px; border-radius: 4px; font-weight: bold; margin-bottom: 12px; border: 1px solid #fff; text-align: center; }
 
         .player-section { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
@@ -465,7 +459,6 @@ function updateGameplayUI(room) {
     const localUserInsidePlayers = room.players.find(pl => pl.sessionToken === sessionToken);
     const isMyTurnRightNow = localUserInsidePlayers && room.players[room.currentPlayerIdx]?.sessionToken === sessionToken;
 
-    // SPECTATOR HUD LOGIC GATEWAY: If user is safely out, activate full spectator panel notification
     if (localUserInsidePlayers) {
         let isSafeSpectator = (localUserInsidePlayers.out && !localUserInsidePlayers.finishedOnPickup);
         document.getElementById('spectator-mode-hud-alert').style.display = isSafeSpectator ? 'block' : 'none';
@@ -507,7 +500,6 @@ function updateGameplayUI(room) {
         let hasOverride = (i === room.playedStack.length - 2 && room.activeSuitOverride !== null);
         wrap.appendChild(renderCardGraphic(cData, i, true, false, hasOverride ? room.activeSuitOverride : null));
         
-        // LABEL INJECTION SYSTEM: Appends user labels below EVERY single historical item in sequence arrays
         let ln = document.createElement('div'); ln.className = 'card-owner-line'; ln.style.backgroundColor = cData.playerColor;
         let tag = document.createElement('div'); tag.className = 'card-owner-name'; tag.style.color = cData.playerColor; tag.innerText = cData.playedBy;
         ln.appendChild(tag); wrap.appendChild(ln);
@@ -552,7 +544,6 @@ function updateGameplayUI(room) {
         let handDiv = document.createElement('div'); handDiv.className = 'hand';
         if (p.hand && Array.isArray(p.hand)) {
             p.hand.forEach((card, cIdx) => {
-                // SPECTATOR DISCOVERY GATEWAY: Reveal cards if it's your own hand OR if the card payload has data populated (Safe Spectators)
                 let revealFace = (isMe && !p.out) || (card.displayValue !== undefined);
                 let clickable = isActive && isMe && !p.out;
                 handDiv.appendChild(renderCardGraphic(card, cIdx, revealFace, clickable, null));
@@ -590,13 +581,14 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
         finalSuit = localJokerConfig.suit;
     }
 
-    // CHECK FOR UN-NEUTRALIZED WILD ACE: Activate custom visual states
-    let isWildAceWithOverride = (card.displayValue === 'A' && (activeSuitOverride !== null || card.suitOverrideActive));
-    if (isWildAceWithOverride) {
-        finalSuit = activeSuitOverride || card.displaySuit;
+    // ORIGINAL SPEC TRACKING METADATA: Append override context labels directly to layout text strings
+    let hasActiveOverride = (activeSuitOverride !== null || card.suitOverrideActive);
+    if (card.displayValue === 'A' && hasActiveOverride) {
+        let calledSuit = activeSuitOverride || card.displaySuit;
+        finalSuit = `${card.originalSuit || card.displaySuit} (→ ${calledSuit})`;
     }
 
-    let isRed = finalSuit === '♥' || finalSuit === '♦';
+    let isRed = finalSuit.includes('♥') || finalSuit.includes('♦');
     div.className = `card ${isRed ? 'red' : ''}`;
 
     let sel = selectedCards.find(s => s.index === index);
@@ -605,40 +597,23 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
         let bd = document.createElement('div'); bd.className = 'badge'; bd.innerText = sel.order; div.appendChild(bd);
     }
 
-    // Header Rendering Node
     let top = document.createElement('div'); 
     top.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); 
-    if (isWildAceWithOverride) top.className = "card-corner-wrapper faded-out-corners"; // Suppress corners
     div.appendChild(top);
     
-    // Core Layout Watermark Center Engine
     if (isOriginallyJoker) {
         if (finalValue === 'Joker') {
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
         } else {
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-ghost-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
         }
-    } else if (isWildAceWithOverride) {
-        // Render large vibrant called suit icon cleanly centered on card face body
-        let centerSuit = document.createElement('div'); 
-        centerSuit.className = 'card-watermark vibrant-colored-center'; 
-        centerSuit.innerText = finalSuit; 
-        div.appendChild(centerSuit);
-
-        // Render subtle background reference to original suit selection parameters
-        let ghost = document.createElement('div'); 
-        ghost.className = 'card-watermark ace-ghost-watermark'; 
-        ghost.innerText = card.originalSuit || card.displaySuit; 
-        div.appendChild(ghost);
     } else if (card.displayValue === 'A' && activeSuitOverride !== null) {
         let ghost = document.createElement('div'); ghost.className = 'card-watermark ace-ghost-watermark'; ghost.innerText = card.displaySuit; div.appendChild(ghost);
     }
     
-    // Footer Rendering Node
     let bot = document.createElement('div'); 
     bot.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); 
     bot.style.textAlign = 'right'; 
-    if (isWildAceWithOverride) bot.className = "faded-out-corners"; // Suppress corners
     div.appendChild(bot);
 
     if (interactive) {
