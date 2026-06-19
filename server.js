@@ -399,7 +399,15 @@ function executeChainActions(room, chain, player) {
     }
     else if (topVal === 'J' && (topSuit === '♠' || topSuit === '♣')) room.activePickupCount += 4;
     else if (topVal === 'J' && (topSuit === '♥' || topSuit === '♦')) room.activePickupCount = 0;
-    else if (topVal === '8') advanceTurn(room);
+    
+    // 🔄 RE-ENGINEERED SKIP CHAINING COMPILING ENGINE:
+    else if (topVal === '8') {
+        let totalEightSkips = chain.filter(c => c.displayValue === '8').length;
+        for (let s = 0; s < totalEightSkips; s++) {
+            advanceTurn(room);
+        }
+    }
+    
     else if (topVal === 'K' && room.players.length > 2) room.turnDirection *= -1;
 
     if (player.hand.length === 0) {
@@ -574,7 +582,6 @@ function checkAndExecuteBotTurn(room) {
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
 
-        // --- 1. DEFENSIVE ATTACK ROUTINE ---
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => {
                 if (c.isJoker) return true;
@@ -598,7 +605,6 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        // --- 2. STRICT SINGLE-CARD VALIDATION DEPLOYMENT ---
         let playCardIdx = currentMover.hand.findIndex(c => {
             let cardCopy = { ...c };
             if (cardCopy.isJoker) {
@@ -611,7 +617,6 @@ function checkAndExecuteBotTurn(room) {
         if (playCardIdx > -1) {
             let card = currentMover.hand[playCardIdx];
             
-            // Declare card if hand is emptying next step
             if (currentMover.hand.length === 2) {
                 currentMover.saidCard = true;
             }
