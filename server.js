@@ -123,15 +123,12 @@ function getValidPermutation(cards, room) {
             } else {
                 let prevCard = order[i - 1];
 
-                // 1. Structural bridge match gate for same-suit 2 -> Ace
                 if (prevCard.displayValue === '2' && card.displayValue === 'A' && card.suit === prevCard.suit) {
                     // Valid step
                 } 
-                // 2. Structural bridge match gate for same-suit Ace -> 2
                 else if (prevCard.displayValue === 'A' && card.displayValue === '2' && card.suit === prevCard.suit) {
                     // Valid step
                 }
-                // 3. Fallback gate: force absolute consecutive rule matching if no bridges were matched
                 else if (!isValidConsecutiveStep(card, prevCard)) {
                     sequenceIsValid = false; 
                     break;
@@ -577,6 +574,7 @@ function checkAndExecuteBotTurn(room) {
         let activeSuit = room.activeSuitOverride || currentTop.displaySuit;
         let activeVal = currentTop.displayValue;
 
+        // --- 1. DEFENSIVE ATTACK ROUTINE ---
         if (room.activePickupCount > 0) {
             let defenseIdx = currentMover.hand.findIndex(c => {
                 if (c.isJoker) return true;
@@ -600,96 +598,34 @@ function checkAndExecuteBotTurn(room) {
             return;
         }
 
-        let bestSequenceIndices = [];
-        let bestJokerConfigs = [];
-
-        function evaluateIndexCombo(comboIndices) {
-            let orders = permute(comboIndices);
-
-            for (let order of orders) {
-                let currentSuit = activeSuit;
-                let currentVal = activeVal;
-                let currentOverride = room.activeSuitOverride;
-                let validOrderConfigs = [];
-                let sequenceValid = true;
-
-                for (let i = 0; i < order.length; i++) {
-                    let handIdx = order[i];
-                    let realCard = currentMover.hand[handIdx];
-                    let cardCopy = { ...realCard };
-
-                    if (cardCopy.isJoker) {
-                        cardCopy.displaySuit = (i === 0 && currentOverride !== null) ? currentOverride : currentSuit;
-                        cardCopy.displayValue = currentVal === 'Joker' ? '7' : currentVal;
-                    }
-
-                    if (i > 0 && currentVal === '2' && cardCopy.displayValue === 'A' && cardCopy.suit === currentSuit) {
-                        if (realCard.isJoker) {
-                            validOrderConfigs.push({ index: handIdx, suit: cardCopy.displaySuit, value: cardCopy.displayValue });
-                        }
-                        currentVal = cardCopy.displayValue;
-                        currentSuit = cardCopy.displaySuit;
-                        currentOverride = null;
-                    }
-                    else if (isValidStep(cardCopy, currentVal, currentSuit, currentOverride, i === 0)) {
-                        if (realCard.isJoker) {
-                            validOrderConfigs.push({ index: handIdx, suit: cardCopy.displaySuit, value: cardCopy.displayValue });
-                        }
-                        currentVal = cardCopy.displayValue;
-                        currentSuit = cardCopy.displaySuit;
-                        currentOverride = null;
-                    } else {
-                        sequenceValid = false;
-                        break;
-                    }
-                }
-
-                if (sequenceValid) {
-                    return { indexOrder: order, jokerConfigs: validOrderConfigs };
-                }
+        // --- 2. STRICT SINGLE-CARD VALIDATION DEPLOYMENT ---
+        let playCardIdx = currentMover.hand.findIndex(c => {
+            let cardCopy = { ...c };
+            if (cardCopy.isJoker) {
+                cardCopy.displaySuit = activeSuit;
+                cardCopy.displayValue = activeVal === 'Joker' ? '7' : activeVal;
             }
-            return null;
-        }
+            return isValidStep(cardCopy, activeVal, activeSuit, room.activeSuitOverride, true);
+        });
 
-        let handIndices = currentMover.hand.map((_, idx) => idx);
-        
-        function runPowersetScanner(start, currentCombo) {
-            if (currentCombo.length > 0 && currentCombo.length <= 4) {
-                let result = evaluateIndexCombo(currentCombo);
-                if (result && result.indexOrder.length > bestSequenceIndices.length) {
-                    bestSequenceIndices = result.indexOrder;
-                    bestJokerConfigs = result.jokerConfigs;
-                }
-            }
-            if (currentCombo.length >= 4) return;
-
-            for (let i = start; i < handIndices.length; i++) {
-                runPowersetScanner(i + 1, currentCombo.concat([handIndices[i]]));
-            }
-        }
-
-        runPowersetScanner(0, []);
-
-        if (bestSequenceIndices && bestSequenceIndices.length > 0) {
-            if (currentMover.hand.length - bestSequenceIndices.length <= 1) {
+        if (playCardIdx > -1) {
+            let card = currentMover.hand[playCardIdx];
+            
+            // Declare card if hand is emptying next step
+            if (currentMover.hand.length === 2) {
                 currentMover.saidCard = true;
             }
 
-            bestJokerConfigs.forEach(conf => {
-                let jCard = currentMover.hand[conf.index];
-                if (jCard) {
-                    jCard.displaySuit = conf.suit;
-                    jCard.displayValue = conf.value;
-                    jCard.suit = conf.suit;
-                    jCard.value = conf.value;
-                }
-            });
+            if (card.isJoker) {
+                card.displaySuit = activeSuit;
+                card.displayValue = activeVal === 'Joker' ? '7' : activeVal;
+                card.suit = activeSuit;
+                card.value = card.displayValue;
+            }
 
-            let realCardsToPlay = bestSequenceIndices.map(idx => currentMover.hand[idx]);
-            currentMover.hand = currentMover.hand.filter((_, idx) => !bestSequenceIndices.includes(idx));
-
+            currentMover.hand.splice(playCardIdx, 1);
             room.activeSuitOverride = null;
-            executeChainActions(room, realCardsToPlay, currentMover);
+            executeChainActions(room, [card], currentMover);
         } else {
             executeDrawAction(room, currentMover);
         }
