@@ -14,7 +14,7 @@
         :root { 
             --card-width: 85px; 
             --card-height: 125px; 
-            -webkit-user-select: none; /* Block accidental site highlighting globally */
+            -webkit-user-select: none; 
             user-select: none;
         }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #143d22; color: white; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
@@ -324,43 +324,6 @@ function displayLobby(room) {
         label.innerText = `• ${p.name} ${p.id === socket.id ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
         pDiv.appendChild(label);
         
-        if (p.isAI) {
-            let select = document.createElement('select');
-            select.style.width = "auto";
-            select.style.padding = "4px 8px";
-            select.style.margin = "0";
-            select.style.fontSize = "12px";
-            select.style.background = "#222";
-            select.style.color = "white";
-            select.style.border = "1px solid " + p.color;
-            select.style.borderRadius = "4px";
-            
-            let easyOpt = new Option("Easy", "easy");
-            let medOpt = new Option("Medium", "medium");
-            let hardOpt = new Option("Hard", "hard");
-            
-            select.add(easyOpt);
-            select.add(medOpt);
-            select.add(hardOpt);
-            
-            select.value = p.botDifficulty || "medium";
-            
-            let hostMe = room.players.find(pl => pl.id === socket.id);
-            if (hostMe && hostMe.isHost) {
-                select.onchange = () => {
-                    socket.emit('updateBotDifficultyServer', { 
-                        roomCode: room.code, 
-                        botId: p.id, 
-                        difficulty: select.value 
-                    });
-                };
-            } else {
-                select.disabled = true;
-                select.style.opacity = "0.7";
-            }
-            pDiv.appendChild(select);
-        }
-        
         listArea.appendChild(pDiv);
         if(p.id === socket.id && p.isHost) amIHost = true;
     });
@@ -581,7 +544,6 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
         finalSuit = localJokerConfig.suit;
     }
 
-    // CLEAN ROLLBACK: Use only the basic called suit symbol with no extended trailing arrow text configurations
     if (card.displayValue === 'A' && (activeSuitOverride !== null || card.suitOverrideActive)) {
         finalSuit = activeSuitOverride || card.displaySuit;
     }
@@ -606,7 +568,6 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-ghost-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
         }
     } else if (card.displayValue === 'A' && (activeSuitOverride !== null || card.suitOverrideActive)) {
-        // Show clean background watermark indicator displaying original face suit properties
         let ghost = document.createElement('div'); ghost.className = 'card-watermark ace-ghost-watermark'; ghost.innerText = card.originalSuit || card.displaySuit; div.appendChild(ghost);
     }
     
