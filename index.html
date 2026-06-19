@@ -106,7 +106,7 @@
         .card-watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 12px; font-weight: bold; pointer-events: none; text-align: center; white-space: nowrap; }
         .joker-watermark { color: #7b1fa2; border: 1px dashed #7b1fa2; padding: 2px 4px; border-radius: 4px; background: rgba(255,255,255,0.8); }
         
-        /* 🎨 Dimmed Center Layout Classes */
+        /* 🎨 Fixed Center Watermark Opacity Rules */
         .ace-ghost-watermark { font-size: 32px; color: rgba(0, 0, 0, 0.12); font-weight: normal; }
         .ace-dimmed-center { opacity: 0.15 !important; }
         
@@ -219,15 +219,18 @@ const sessionToken = localStorage.getItem('blackjack_session_token');
 const VALUE_WEIGHTS = { 'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13, 'Joker':99 };
 const SUIT_WEIGHTS = { '♠':1, '♥':2, '♦':3, '♣':4, '🃏':99 };
 
+// 🔄 FIXED: Recovery handler now evaluates safety conditions before firing socket transmissions
 function checkAndTriggerWakeupRecovery() {
     const urlParams = new URLSearchParams(window.location.search);
     const savedRoom = urlParams.get('room');
-    if (savedRoom) {
-        if (!socket.connected) {
-            socket.connect();
-        }
-        socket.emit('attemptSessionRecovery', { token: sessionToken, roomCode: savedRoom });
+    
+    // Stop empty or un-hosted query checks from breaking home menu states
+    if (!savedRoom || savedRoom === '----') return;
+
+    if (!socket.connected) {
+        socket.connect();
     }
+    socket.emit('attemptSessionRecovery', { token: sessionToken, roomCode: savedRoom });
 }
 
 window.onload = () => {
@@ -244,6 +247,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 socket.on('sessionRecoverySuccess', ({ room, myId }) => {
+    currentRoom = room;
     document.getElementById('menu-container').style.display = 'none';
     document.getElementById('game-container').style.display = 'block';
     updateGameplayUI(room);
@@ -299,7 +303,63 @@ function addBotToLobby() {
     socket.emit('addBotServer', { roomCode: currentRoom.code });
 }
 
-// RESTORED CLEAN SINGLE CARD ACTION TRIGGERS
+function launchGame() {
+    socket.emit('startGameServer', { roomCode: currentRoom.code });
+}
+
+function triggerRoundRematch() {
+    socket.emit('requestRematchServer', { roomCode: currentRoom.code });
+}
+
+function quitGameActionConfirm() {
+    const choice = confirm("Are you sure you want to quit this room? You will lose your current hand and score stats.");
+    if (choice) {
+        localStorage.removeItem('blackjack_session_token');
+        if (currentRoom) {
+            socket.emit('leaveRoomPermanently', { roomCode: currentRoom.code, token: sessionToken });
+        }
+        window.location.href = window.location.pathname;
+    }
+}
+
+function displayLobby(room) {
+    currentRoom = room;
+    document.getElementById('host-panel').style.display = 'none';
+    document.getElementById('join-panel').style.display = 'none';
+    document.getElementById('lobby-waiting').style.display = 'block';
+    document.getElementById('display-room-code').innerText = room.code;
+    document.getElementById('lobby-count').innerText = room.players.length;
+    document.getElementById('lobby-max').innerText = room.maxPlayers;
+    
+    let listArea = document.getElementById('lobby-player-list'); 
+    listArea.innerHTML = '';
+    let amIHost = false;
+    
+    room.players.forEach(p => {
+        let pDiv = document.createElement('div'); 
+        pDiv.style.color = p.color;
+        pDiv.style.marginBottom = "8px";
+        pDiv.style.display = "flex";
+        pDiv.style.alignItems = "center";
+        pDiv.style.gap = "10px";
+        
+        let label = document.createElement('span');
+        label.innerText = `• ${p.name} ${p.id === socket.id ? ' (You)' : ''} ${p.isHost ? ' [HOST]' : ''} ${p.isAI ? ' [BOT]' : ''}`;
+        pDiv.appendChild(label);
+        
+        listArea.appendChild(pDiv);
+        if(p.id === socket.id && p.isHost) amIHost = true;
+    });
+    
+    if (amIHost) {
+        document.getElementById('add-ai-btn').style.display = (room.players.length < room.maxPlayers) ? 'block' : 'none';
+        document.getElementById('start-game-lobby-btn').style.display = (room.players.length >= 2) ? 'block' : 'none';
+    } else {
+        document.getElementById('add-ai-btn').style.display = 'none';
+        document.getElementById('start-game-lobby-btn').style.display = 'none';
+    }
+}
+
 function playSelectionNetwork() {
     if(selectedCards.length === 0) return;
     let sortedSel = [...selectedCards].sort((a,b) => a.order - b.order);
@@ -525,7 +585,6 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
     top.innerText = (finalValue === 'Joker' ? '🃏' : finalValue + finalSuit); 
     div.appendChild(top);
     
-    // 🎨 FIXED CENTER WATERMARK INJECTION CORE:
     if (isOriginallyJoker) {
         if (finalValue === 'Joker') {
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
@@ -533,7 +592,7 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-ghost-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
         }
     } else if (isWildAceWithOverride) {
-        // Explicitly forces the center suit character into its own isolated structural container row to track opacity configurations flawlessly
+        // Formats the background watermark with clean, faded 15% opacity styling safely separating characters from standard headers
         let ghost = document.createElement('div'); 
         ghost.className = 'card-watermark ace-ghost-watermark ace-dimmed-center'; 
         ghost.innerText = finalSuit; 
