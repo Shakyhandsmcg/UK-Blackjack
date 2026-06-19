@@ -581,14 +581,12 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
         finalSuit = localJokerConfig.suit;
     }
 
-    // ORIGINAL SPEC TRACKING METADATA: Append override context labels directly to layout text strings
-    let hasActiveOverride = (activeSuitOverride !== null || card.suitOverrideActive);
-    if (card.displayValue === 'A' && hasActiveOverride) {
-        let calledSuit = activeSuitOverride || card.displaySuit;
-        finalSuit = `${card.originalSuit || card.displaySuit} (→ ${calledSuit})`;
+    // CLEAN ROLLBACK: Use only the basic called suit symbol with no extended trailing arrow text configurations
+    if (card.displayValue === 'A' && (activeSuitOverride !== null || card.suitOverrideActive)) {
+        finalSuit = activeSuitOverride || card.displaySuit;
     }
 
-    let isRed = finalSuit.includes('♥') || finalSuit.includes('♦');
+    let isRed = finalSuit === '♥' || finalSuit === '♦';
     div.className = `card ${isRed ? 'red' : ''}`;
 
     let sel = selectedCards.find(s => s.index === index);
@@ -607,8 +605,9 @@ function renderCardGraphic(card, index, showFace, interactive, activeSuitOverrid
         } else {
             let wm = document.createElement('div'); wm.className = 'card-watermark joker-ghost-watermark'; wm.innerText = "🃏 JOKER"; div.appendChild(wm);
         }
-    } else if (card.displayValue === 'A' && activeSuitOverride !== null) {
-        let ghost = document.createElement('div'); ghost.className = 'card-watermark ace-ghost-watermark'; ghost.innerText = card.displaySuit; div.appendChild(ghost);
+    } else if (card.displayValue === 'A' && (activeSuitOverride !== null || card.suitOverrideActive)) {
+        // Show clean background watermark indicator displaying original face suit properties
+        let ghost = document.createElement('div'); ghost.className = 'card-watermark ace-ghost-watermark'; ghost.innerText = card.originalSuit || card.displaySuit; div.appendChild(ghost);
     }
     
     let bot = document.createElement('div'); 
